@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-dark: #050505;
+    --accent-yellow: #facc15;
+    --accent-cyan: #22d3ee;
+    --accent-emerald: #10b981;
+    --accent-danger: #ef4444;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #050505;
+    color: #f3f4f6;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* Pulsing voice orb animations */
+@keyframes orb-pulse-listening {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 35px 10px rgba(34, 211, 238, 0.45), inset 0 0 20px rgba(34, 211, 238, 0.6);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 65px 25px rgba(34, 211, 238, 0.75), inset 0 0 30px rgba(250, 204, 21, 0.8);
+  }
+}
+
+@keyframes orb-pulse-speaking {
+  0%, 100% {
+    transform: scale(1.02);
+    box-shadow: 0 0 40px 15px rgba(16, 185, 129, 0.5), inset 0 0 25px rgba(16, 185, 129, 0.7);
+  }
+  50% {
+    transform: scale(1.22);
+    box-shadow: 0 0 75px 30px rgba(16, 185, 129, 0.85), inset 0 0 35px rgba(52, 211, 153, 0.9);
+  }
+}
+
+@keyframes orb-spin-thinking {
+  0% {
+    transform: rotate(0deg) scale(1.05);
+    box-shadow: 0 0 45px 15px rgba(168, 85, 247, 0.5);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.18);
+    box-shadow: 0 0 70px 25px rgba(236, 72, 153, 0.7);
+  }
+  100% {
+    transform: rotate(360deg) scale(1.05);
+    box-shadow: 0 0 45px 15px rgba(168, 85, 247, 0.5);
+  }
+}
+
+.orb-listening {
+  animation: orb-pulse-listening 1.8s ease-in-out infinite;
+}
+
+.orb-speaking {
+  animation: orb-pulse-speaking 1.2s ease-in-out infinite;
+}
+
+.orb-thinking {
+  animation: orb-spin-thinking 2s linear infinite;
+}
+
+/* Radar sweep beam animation */
+@keyframes radar-sweep {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+}
