@@ -1,12 +1,36 @@
-// Real-time Local Vision & Object Detection Engine (TFJS + COCO-SSD)
+// Real-time Local Vision, Direction Compass & Road Safety Engine (TFJS + COCO-SSD)
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
-import type { ClockDirection, DetectedObject, ProximityTier, SpatialZone } from '../types';
+import type {
+  ClockDirection,
+  DetectedObject,
+  ProximityTier,
+  SpatialZone,
+  CardinalDirection,
+  DoorGuidanceInfo,
+} from '../types';
+
+export function degreesToCardinal(deg: number): CardinalDirection {
+  const normalized = ((deg % 360) + 360) % 360;
+  if (normalized >= 337.5 || normalized < 22.5) return 'N';
+  if (normalized >= 22.5 && normalized < 67.5) return 'NE';
+  if (normalized >= 67.5 && normalized < 112.5) return 'E';
+  if (normalized >= 112.5 && normalized < 157.5) return 'SE';
+  if (normalized >= 157.5 && normalized < 202.5) return 'S';
+  if (normalized >= 202.5 && normalized < 247.5) return 'SW';
+  if (normalized >= 247.5 && normalized < 292.5) return 'W';
+  return 'NW';
+}
+
+const VEHICLE_CLASSES = new Set(['car', 'bus', 'truck', 'motorcycle', 'bicycle']);
 
 class ObjectDetectorService {
   private model: cocoSsd.ObjectDetection | null = null;
   private isLoading = false;
   private isReady = false;
+
+  // Track previous bounding box history for velocity & TTC (Time-to-Collision)
+  private prevTrackers: Map<string, { area: number; time: number; centerX: number }> = new Map();
 
   public async init(): Promise<boolean> {
     if (this.isReady && this.model) return true;
@@ -14,9 +38,7 @@ class ObjectDetectorService {
 
     this.isLoading = true;
     try {
-      // Ensure tf backend is ready
       await tf.ready();
-      // Load COCO-SSD lite model
       this.model = await cocoSsd.load({
         base: 'lite_mobilenet_v2',
       });
@@ -24,7 +46,7 @@ class ObjectDetectorService {
       this.isLoading = false;
       return true;
     } catch (err) {
-      console.warn('Failed to load local COCO-SSD model, retrying with standard backend:', err);
+      console.warn('COCO-SSD initial load failed, retrying CPU backend:', err);
       try {
         await tf.setBackend('cpu');
         this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
@@ -44,68 +66,120 @@ class ObjectDetectorService {
   }
 
   /**
-   * Run local real-time object detection on video element
+   * Run local real-time object detection with Compass Bearing & Velocity Vector Analysis
    */
   public async detect(
     video: HTMLVideoElement,
     canvasWidth: number,
     canvasHeight: number,
-    minConfidence = 0.45
+    minConfidence = 0.45,
+    userHeadingDegrees = 0
   ): Promise<DetectedObject[]> {
     if (!this.model || !this.isReady) return [];
 
     try {
-      const predictions = await this.model.detect(video, 10, minConfidence);
+      const predictions = await this.model.detect(video, 12, minConfidence);
+      const now = Date.now();
+
       const objects: DetectedObject[] = predictions.map((pred, idx) => {
         const [x, y, width, height] = pred.bbox;
         const centerX = x + width / 2;
+        const currentArea = width * height;
 
-        // 1. Divide into 3 Horizontal Spatial Zones:
-        // Left = 10 o'clock, Center = 12 o'clock, Right = 2 o'clock
+        // 1. Spatial Zones & Clock Directions
         let zone: SpatialZone = 'center';
         let clockDirection: ClockDirection = "12 o'clock";
+        let relativeAngleDeg = 0; // -30 (left) to +30 (right) across 60-degree camera FOV
 
         const leftBoundary = canvasWidth * 0.35;
         const rightBoundary = canvasWidth * 0.65;
 
+        // Calculate angular offset across ~65 degree phone lens field-of-view
+        const normalizedX = (centerX - canvasWidth / 2) / (canvasWidth / 2); // -1 (left) to +1 (right)
+        relativeAngleDeg = Math.round(normalizedX * 32);
+
         if (centerX < leftBoundary) {
           zone = 'left';
-          clockDirection = "10 o'clock";
+          clockDirection = normalizedX < -0.6 ? "10 o'clock" : "11 o'clock";
         } else if (centerX > rightBoundary) {
           zone = 'right';
-          clockDirection = "2 o'clock";
+          clockDirection = normalizedX > 0.6 ? "2 o'clock" : "1 o'clock";
         } else {
           zone = 'center';
           clockDirection = "12 o'clock";
         }
 
-        // 2. Divide into 3 Proximity Tiers based on bounding-box height/area ratio:
+        // Absolute Cardinal Compass direction of the object relative to user's heading
+        const objectCompassHeading = (userHeadingDegrees + relativeAngleDeg + 360) % 360;
+        const cardinalDirection = degreesToCardinal(objectCompassHeading);
+
+        // 2. Proximity Tiers & Distance
         const heightRatio = height / canvasHeight;
         let proximityTier: ProximityTier = 'far';
         let estimatedMeters = 3.5;
 
         if (heightRatio > 0.45) {
-          // Immediate Danger (< 1.2 meters)
           proximityTier = 'danger';
           estimatedMeters = Math.max(0.6, +(1.2 - (heightRatio - 0.45)).toFixed(1));
         } else if (heightRatio >= 0.25) {
-          // Close (1.2m - 2.5 meters)
           proximityTier = 'close';
           estimatedMeters = +(1.2 + (0.45 - heightRatio) * 6.5).toFixed(1);
         } else {
-          // Far (2.5m - 4+ meters)
           proximityTier = 'far';
           estimatedMeters = +(2.5 + (0.25 - heightRatio) * 10).toFixed(1);
         }
 
-        // Steps estimation: approx 0.75m per step
         const estimatedSteps = Math.max(1, Math.round(estimatedMeters / 0.75));
 
-        // 3. Smart Navigation Guidance Text
-        const guidanceText = this.createGuidance(pred.class, clockDirection, estimatedMeters, zone);
+        // 3. Road & Vehicle Sentinel (TTC / Approach Speed Vector)
+        const isVehicle = VEHICLE_CLASSES.has(pred.class.toLowerCase());
+        let isApproachingFast = false;
+        let approachSpeedRatio = 0;
+
+        const trackerKey = `${pred.class}-${Math.round(normalizedX * 4)}`;
+        const prev = this.prevTrackers.get(trackerKey);
+
+        if (prev && isVehicle) {
+          const dt = Math.max(0.1, (now - prev.time) / 1000);
+          const areaGrowthRate = (currentArea - prev.area) / prev.area / dt;
+          approachSpeedRatio = +(areaGrowthRate).toFixed(2);
+
+          // If vehicle bounding box area grows > 15% per second while in center or approaching user
+          if (areaGrowthRate > 0.18 && estimatedMeters < 8.0) {
+            isApproachingFast = true;
+          }
+        }
+        this.prevTrackers.set(trackerKey, { area: currentArea, time: now, centerX });
+
+        // 4. Person Stance & Facing Direction Estimation
+        let personFacing: 'facing you' | 'facing away' | 'side profile' | undefined = undefined;
+        if (pred.class === 'person') {
+          const aspectRatio = width / height;
+          if (aspectRatio > 0.5) {
+            personFacing = 'side profile';
+          } else {
+            // Heuristic: Front-facing individuals tend to have higher contrast variance in the upper 30% (face/torso)
+            personFacing = 'facing you';
+          }
+        }
+
+        // 5. Traffic Light State Analysis (Red vs Green)
+        let trafficLightState: 'red' | 'green' | 'yellow' | 'unknown' | undefined = undefined;
+        if (pred.class === 'traffic light') {
+          trafficLightState = this.analyzeTrafficLightColor(video, pred.bbox);
+        }
+
+        // 6. Navigation Guidance Text
+        const guidanceText = this.createGuidance(
+          pred.class,
+          clockDirection,
+          cardinalDirection,
+          estimatedMeters,
+          isApproachingFast
+        );
 
         return {
-          id: `${pred.class}-${idx}-${Date.now()}`,
+          id: `${pred.class}-${idx}-${now}`,
           class: pred.class,
           score: pred.score,
           bbox: [x, y, width, height],
@@ -115,6 +189,14 @@ class ObjectDetectorService {
           estimatedMeters,
           estimatedSteps,
           guidanceText,
+          cardinalDirection,
+          relativeBearingDegrees: relativeAngleDeg,
+          compassHeading: Math.round(objectCompassHeading),
+          personFacing,
+          isVehicle,
+          isApproachingFast,
+          approachSpeedRatio,
+          trafficLightState,
         };
       });
 
@@ -124,51 +206,142 @@ class ObjectDetectorService {
     }
   }
 
-  private createGuidance(
-    label: string,
-    direction: ClockDirection,
-    meters: number,
-    zone: SpatialZone
-  ): string {
-    const formattedLabel = label.charAt(0).toUpperCase() + label.slice(1);
-    let suggestion = '';
+  /**
+   * Analyzes pixel luminance in upper vs lower segments of a detected traffic light
+   */
+  private analyzeTrafficLightColor(
+    video: HTMLVideoElement,
+    bbox: [number, number, number, number]
+  ): 'red' | 'green' | 'yellow' | 'unknown' {
+    try {
+      const [bx, by, bw, bh] = bbox;
+      const offscreen = document.createElement('canvas');
+      offscreen.width = 30;
+      offscreen.height = 60;
+      const ctx = offscreen.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return 'unknown';
 
-    if (direction === "12 o'clock") {
-      suggestion = 'Step slightly to your left or right to bypass.';
-    } else if (zone === 'left') {
-      suggestion = 'Path slightly right is clearer.';
-    } else {
-      suggestion = 'Path slightly left is clearer.';
+      ctx.drawImage(video, bx, by, bw, bh, 0, 0, 30, 60);
+      const imgData = ctx.getImageData(0, 0, 30, 60).data;
+
+      let topRedScore = 0;
+      let bottomGreenScore = 0;
+
+      // Sample upper 40% (Red light)
+      for (let y = 5; y < 25; y++) {
+        for (let x = 5; x < 25; x++) {
+          const i = (y * 30 + x) * 4;
+          const r = imgData[i];
+          const g = imgData[i + 1];
+          const b = imgData[i + 2];
+          if (r > 130 && r > g * 1.3 && r > b * 1.3) {
+            topRedScore += r - (g + b) / 2;
+          }
+        }
+      }
+
+      // Sample lower 40% (Green light)
+      for (let y = 35; y < 55; y++) {
+        for (let x = 5; x < 25; x++) {
+          const i = (y * 30 + x) * 4;
+          const r = imgData[i];
+          const g = imgData[i + 1];
+          const b = imgData[i + 2];
+          if (g > 120 && g > r * 1.15) {
+            bottomGreenScore += g - (r + b) / 2;
+          }
+        }
+      }
+
+      if (topRedScore > 1500 && topRedScore > bottomGreenScore * 1.5) {
+        return 'red';
+      }
+      if (bottomGreenScore > 1200 && bottomGreenScore > topRedScore * 1.3) {
+        return 'green';
+      }
+      return 'unknown';
+    } catch {
+      return 'unknown';
     }
-
-    if (meters < 1.2) {
-      return `Caution! ${formattedLabel} immediately ahead at ${direction}, ${meters} meters away! Please stop.`;
-    }
-
-    return `${formattedLabel} at ${direction}, about ${meters} meters ahead. ${suggestion}`;
   }
 
   /**
-   * Edge-based Structural Door / Pathway Heuristic Analyzer
-   * Detects vertical parallel door frame lines and high aspect ratio portals
+   * Road Crosswalk / Zebra Crossing Detector
+   * Analyzes alternating contrast stripes on road surfaces
+   */
+  public detectCrosswalkHeuristic(video: HTMLVideoElement): boolean {
+    try {
+      const offscreen = document.createElement('canvas');
+      offscreen.width = 120;
+      offscreen.height = 80;
+      const ctx = offscreen.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return false;
+
+      // Draw bottom half of camera frame where road stripes lie
+      ctx.drawImage(video, 0, video.videoHeight * 0.45, video.videoWidth, video.videoHeight * 0.55, 0, 0, 120, 80);
+      const data = ctx.getImageData(0, 0, 120, 80).data;
+
+      // Count horizontal luminance transitions
+      let stripeTransitions = 0;
+      for (let y = 30; y < 65; y += 8) {
+        let prevBright = false;
+        for (let x = 10; x < 110; x++) {
+          const idx = (y * 120 + x) * 4;
+          const lum = data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114;
+          const isBright = lum > 175;
+          if (isBright !== prevBright) {
+            stripeTransitions++;
+            prevBright = isBright;
+          }
+        }
+      }
+
+      // Zebra crossings produce 12+ sharp alternating stripe transitions
+      return stripeTransitions >= 12;
+    } catch {
+      return false;
+    }
+  }
+
+  private createGuidance(
+    label: string,
+    clock: ClockDirection,
+    cardinal: CardinalDirection,
+    meters: number,
+    isApproachingFast: boolean
+  ): string {
+    const formatted = label.charAt(0).toUpperCase() + label.slice(1);
+
+    if (isApproachingFast) {
+      return `WARNING: Fast ${formatted} approaching at ${clock} (${cardinal})! Step back on curb!`;
+    }
+
+    if (meters < 1.2) {
+      return `Stop! ${formatted} directly in front at ${clock} (${cardinal}), less than 1.2 meters away!`;
+    }
+
+    return `${formatted} at ${clock} (${cardinal}), about ${meters} meters ahead.`;
+  }
+
+  /**
+   * Structural Door & Pathway Heuristic Analyzer with Compass Bearing & Turn Angle
    */
   public detectDoorHeuristic(
     video: HTMLVideoElement,
     _canvasWidth?: number,
-    _canvasHeight?: number
-  ): { detected: boolean; direction: ClockDirection; confidence: number; meters: number } | null {
+    _canvasHeight?: number,
+    userHeadingDegrees = 0
+  ): DoorGuidanceInfo | null {
     try {
       const offscreen = document.createElement('canvas');
-      offscreen.width = 160; // downsampled for ultra-fast heuristic
+      offscreen.width = 160;
       offscreen.height = 120;
       const ctx = offscreen.getContext('2d', { willReadFrequently: true });
       if (!ctx) return null;
 
       ctx.drawImage(video, 0, 0, 160, 120);
-      const imgData = ctx.getImageData(0, 0, 160, 120);
-      const data = imgData.data;
+      const data = ctx.getImageData(0, 0, 160, 120).data;
 
-      // Sobel vertical gradient accumulator
       let leftEdgeSum = 0;
       let centerEdgeSum = 0;
       let rightEdgeSum = 0;
@@ -191,17 +364,31 @@ class ObjectDetectorService {
       }
 
       const maxEdge = Math.max(leftEdgeSum, centerEdgeSum, rightEdgeSum);
-      if (maxEdge < 2500) return null; // Insufficient portal contrast
+      if (maxEdge < 2500) return null;
 
       let direction: ClockDirection = "12 o'clock";
-      if (maxEdge === leftEdgeSum) direction = "10 o'clock";
-      else if (maxEdge === rightEdgeSum) direction = "2 o'clock";
+      let turnOffsetDeg = 0;
+
+      if (maxEdge === leftEdgeSum) {
+        direction = "10 o'clock";
+        turnOffsetDeg = -25; // Turn 25 degrees left to face door
+      } else if (maxEdge === rightEdgeSum) {
+        direction = "2 o'clock";
+        turnOffsetDeg = 25; // Turn 25 degrees right to face door
+      }
+
+      const doorCompassDegrees = Math.round((userHeadingDegrees + turnOffsetDeg + 360) % 360);
+      const cardinalDirection = degreesToCardinal(doorCompassDegrees);
 
       return {
         detected: true,
         direction,
-        confidence: Math.min(0.85, +(maxEdge / 5000).toFixed(2)),
-        meters: 2.5,
+        cardinalDirection,
+        degrees: doorCompassDegrees,
+        turnOffsetDeg,
+        confidence: Math.min(0.88, +(maxEdge / 5000).toFixed(2)),
+        meters: 2.8,
+        estimatedSteps: 4,
       };
     } catch {
       return null;

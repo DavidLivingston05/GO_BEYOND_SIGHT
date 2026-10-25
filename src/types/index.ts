@@ -1,6 +1,7 @@
 export type SpatialZone = 'left' | 'center' | 'right';
-export type ClockDirection = "10 o'clock" | "12 o'clock" | "2 o'clock";
+export type ClockDirection = "10 o'clock" | "12 o'clock" | "2 o'clock" | "9 o'clock" | "11 o'clock" | "1 o'clock" | "3 o'clock";
 export type ProximityTier = 'danger' | 'close' | 'far';
+export type CardinalDirection = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
 
 export interface BoundingBox {
   x: number;
@@ -21,6 +22,36 @@ export interface DetectedObject {
   estimatedSteps: number;
   guidanceText: string;
   matchedPersonName?: string;
+  // Direction & Stance Intelligence
+  cardinalDirection?: CardinalDirection;
+  relativeBearingDegrees?: number; // -180 to +180 relative to user heading
+  compassHeading?: number; // 0 - 360 absolute compass
+  personFacing?: 'facing you' | 'facing away' | 'side profile';
+  // Road & Vehicle Safety Sentinel
+  isVehicle?: boolean;
+  isApproachingFast?: boolean;
+  approachSpeedRatio?: number;
+  trafficLightState?: 'red' | 'green' | 'yellow' | 'unknown';
+}
+
+export interface DoorGuidanceInfo {
+  detected: boolean;
+  direction: ClockDirection;
+  cardinalDirection: CardinalDirection;
+  degrees: number; // e.g. 340 deg
+  turnOffsetDeg: number; // e.g. -20 deg (turn 20 left)
+  confidence: number;
+  meters: number;
+  estimatedSteps: number;
+}
+
+export interface RoadSentinelState {
+  isActive: boolean;
+  vehiclesCount: number;
+  approachingVehiclesCount: number;
+  trafficLightState: 'red' | 'green' | 'yellow' | 'none';
+  crosswalkDetected: boolean;
+  curbWarning: boolean;
 }
 
 export interface PersonProfile {

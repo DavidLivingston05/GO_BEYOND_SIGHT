@@ -12,6 +12,14 @@ export type VoiceCommandHandler = (
     | 'remember_person'
     | 'describe_room'
     | 'read_text'
+    | 'toggle_torch'
+    | 'toggle_curtain'
+    | 'check_path'
+    | 'toggle_road_mode'
+    | 'check_traffic_light'
+    | 'which_direction_door'
+    | 'which_direction_person'
+    | 'check_compass'
     | 'general_query',
   rawTranscript: string,
   extra?: { targetObject?: string; personName?: string }
@@ -227,6 +235,108 @@ class SpeechRecognitionService {
       clean.includes('sleep mode')
     ) {
       this.commandHandler('stop_camera', transcript);
+      return;
+    }
+
+    // 2b. Flashlight / Torch toggle
+    if (
+      clean.includes('flashlight') ||
+      clean.includes('turn on light') ||
+      clean.includes('turn off light') ||
+      clean.includes('torch')
+    ) {
+      this.commandHandler('toggle_torch', transcript);
+      return;
+    }
+
+    // 2c. Screen Curtain / OLED Eco Mode
+    if (
+      clean.includes('curtain') ||
+      clean.includes('screen off') ||
+      clean.includes('screen on') ||
+      clean.includes('eco mode') ||
+      clean.includes('save battery') ||
+      clean.includes('battery saver')
+    ) {
+      this.commandHandler('toggle_curtain', transcript);
+      return;
+    }
+
+    // 2d. Check walking path & step count
+    if (
+      clean.includes('is path clear') ||
+      clean.includes('is my path clear') ||
+      clean.includes('can i walk') ||
+      clean.includes('how many steps') ||
+      clean.includes('step count') ||
+      clean.includes('is it safe to walk')
+    ) {
+      this.commandHandler('check_path', transcript);
+      return;
+    }
+
+    // 2e. Road / Street Safety Sentinel Mode
+    if (
+      clean.includes('road mode') ||
+      clean.includes('street mode') ||
+      clean.includes('traffic mode') ||
+      clean.includes('near the road') ||
+      clean.includes('road safety') ||
+      clean.includes('traffic alert')
+    ) {
+      this.commandHandler('toggle_road_mode', transcript);
+      return;
+    }
+
+    // 2f. Traffic Light & Road Crossing Safety Query
+    if (
+      clean.includes('traffic light') ||
+      clean.includes('can i cross') ||
+      clean.includes('safe to cross') ||
+      clean.includes('is it red or green') ||
+      clean.includes('walk signal') ||
+      clean.includes('cross the road') ||
+      clean.includes('crosswalk') ||
+      clean.includes('zebra crossing')
+    ) {
+      this.commandHandler('check_traffic_light', transcript);
+      return;
+    }
+
+    // 2g. Which direction is the door located?
+    if (
+      clean.includes('which direction is the door') ||
+      clean.includes('where is the door facing') ||
+      clean.includes('which way is the door') ||
+      clean.includes('direction of the door') ||
+      clean.includes('door compass')
+    ) {
+      this.commandHandler('which_direction_door', transcript);
+      return;
+    }
+
+    // 2h. Which direction are they standing / facing?
+    if (
+      clean.includes('which direction are they standing') ||
+      clean.includes('which direction is the person') ||
+      clean.includes('where are they facing') ||
+      clean.includes('are they facing me') ||
+      clean.includes('are they looking at me') ||
+      clean.includes('standing direction')
+    ) {
+      this.commandHandler('which_direction_person', transcript);
+      return;
+    }
+
+    // 2i. Compass & Cardinal Direction Heading ("Where am I facing?")
+    if (
+      clean.includes('what direction am i facing') ||
+      clean.includes('which direction am i facing') ||
+      clean.includes('compass heading') ||
+      clean.includes('where is north') ||
+      clean.includes('my heading')
+    ) {
+      this.commandHandler('check_compass', transcript);
       return;
     }
 

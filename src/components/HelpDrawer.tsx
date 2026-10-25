@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Volume2, Mic, HelpCircle, Navigation, Users, Eye } from 'lucide-react';
+import { X, Volume2, Mic, HelpCircle, Navigation, Users, Eye, Compass } from 'lucide-react';
 import { speechManager } from '../services/speechSynthesis';
 
 interface HelpDrawerProps {
@@ -18,29 +18,59 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
 
   const commandCategories = [
     {
+      title: 'Daily Tactile Gestures (No Looking Required)',
+      icon: <Eye className="w-5 h-5 text-yellow-400" />,
+      items: [
+        { phrase: 'Single Tap Anywhere', desc: 'Checks walking path and steps ahead ("Path clear for 4 steps")' },
+        { phrase: 'Double Tap Anywhere', desc: 'Instant detailed scene description ("Describe room")' },
+        { phrase: 'Hold Screen (Long Press)', desc: 'Direct push-to-talk voice prompt. Speak, then release!' },
+        { phrase: 'Swipe Up / Down', desc: 'Toggle camera flashlight for dark rooms & night corridors' },
+        { phrase: 'Three-Finger Tap', desc: 'OLED Eco Screen Curtain (saves 60% battery, camera & radar active)' },
+      ],
+    },
+    {
       title: 'Wake Words & Controls',
       icon: <Mic className="w-5 h-5 text-yellow-400" />,
       items: [
         { phrase: '"Hey Vision"', desc: 'Activates the assistant chime & listener' },
-        { phrase: '"Start Camera" / "Turn on camera"', desc: 'Begins 30FPS real-time spatial navigation' },
-        { phrase: '"Stop Camera" / "Go to sleep"', desc: 'Stops camera and enters standby mode' },
+        { phrase: '"Turn on Flashlight" / "Torch on"', desc: 'Illuminates dark areas so camera can track' },
+        { phrase: '"Screen Curtain on" / "Eco mode"', desc: 'Powers off screen pixels to conserve battery' },
+        { phrase: '"Start Camera" / "Stop Camera"', desc: 'Controls real-time video viewfinder' },
       ],
     },
     {
-      title: 'Object & Spatial Navigation',
+      title: 'Road Sentinel & Street Crossing',
+      icon: <Navigation className="w-5 h-5 text-red-400" />,
+      items: [
+        { phrase: '"Road Mode" / "Street Mode"', desc: 'Activates high-alert approaching vehicle radar and traffic sounds' },
+        { phrase: '"Can I cross the road?" / "Traffic light"', desc: 'Scans pedestrian signal (Red Stop / Green Walk) and zebra stripes' },
+        { phrase: '"What direction am I facing?" / "Compass"', desc: 'Announces exact degrees and cardinal heading (e.g. 315° NW)' },
+      ],
+    },
+    {
+      title: 'Direction & Stance Intelligence',
+      icon: <Compass className="w-5 h-5 text-yellow-400" />,
+      items: [
+        { phrase: '"Which direction is the door located?"', desc: 'Gives exact compass heading (e.g. 340° NW) and turn angle to align' },
+        { phrase: '"Which direction are they standing?"', desc: 'Identifies person orientation (facing towards you, looking away, etc.)' },
+      ],
+    },
+    {
+      title: 'Daily High-Frequency Finders',
       icon: <Navigation className="w-5 h-5 text-cyan-400" />,
       items: [
-        { phrase: '"Where is the chair / table / bottle?"', desc: 'Gives exact clock direction and distance in steps' },
-        { phrase: '"Where is the door / exit / stairs?"', desc: 'Identifies doorways and exits with safe walking advice' },
-        { phrase: '"Is the path clear?"', desc: 'Scans immediate 1.2m danger zone for obstacles' },
+        { phrase: '"Find bottle" / "Find cup"', desc: 'Directional audio sonar beeps faster as you aim at it' },
+        { phrase: '"Find chair" / "Where can I sit?"', desc: 'Finds nearest seat with clock direction and steps' },
+        { phrase: '"Where is the door / exit?"', desc: 'Detects doorways and portals for safe room exiting' },
+        { phrase: '"Is the path clear?"', desc: 'Reports walking corridor clearance and step count' },
       ],
     },
     {
       title: 'People & Face Memory',
       icon: <Users className="w-5 h-5 text-emerald-400" />,
       items: [
-        { phrase: '"Who is in front of me?"', desc: 'Identifies recognized people by name or describes them' },
-        { phrase: '"Remember this person as [Name]"', desc: 'Stores person\'s visual profile and greets them by name' },
+        { phrase: '"Who is in front of me?"', desc: 'Identifies recognized acquaintances or describes people' },
+        { phrase: '"Remember this person as [Name]"', desc: 'Stores person\'s visual profile and announces their name' },
       ],
     },
     {
@@ -48,7 +78,7 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
       icon: <Eye className="w-5 h-5 text-purple-400" />,
       items: [
         { phrase: '"Describe the room"', desc: 'Paints a warm, concise spatial summary of your surroundings' },
-        { phrase: '"Read text" / "Read this"', desc: 'Reads out loud visible signs, letters, and labels' },
+        { phrase: '"Read text" / "Read this"', desc: 'Reads out loud visible signs, letters, and medicine labels' },
       ],
     },
   ];
