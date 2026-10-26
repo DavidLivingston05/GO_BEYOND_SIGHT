@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Volume2, Mic, HelpCircle, Navigation, Users, Eye, Compass } from 'lucide-react';
+import { X, Volume2, Mic, HelpCircle, Navigation, Users, Eye, Compass, Home } from 'lucide-react';
 import { speechManager } from '../services/speechSynthesis';
 
 interface HelpDrawerProps {
@@ -36,6 +36,14 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
         { phrase: '"Turn on Flashlight" / "Torch on"', desc: 'Illuminates dark areas so camera can track' },
         { phrase: '"Screen Curtain on" / "Eco mode"', desc: 'Powers off screen pixels to conserve battery' },
         { phrase: '"Start Camera" / "Stop Camera"', desc: 'Controls real-time video viewfinder' },
+      ],
+    },
+    {
+      title: 'Standard Home Mode & Indoor Comfort',
+      icon: <Home className="w-5 h-5 text-emerald-400" />,
+      items: [
+        { phrase: '"Standard mode" / "Home mode" / "I am home"', desc: 'Activates calm indoor navigation without false sirens or webcam self-detection' },
+        { phrase: '"Cancel" / "Stop beacon" / "Stop finding"', desc: 'Silences active acoustic target beacons immediately' },
       ],
     },
     {

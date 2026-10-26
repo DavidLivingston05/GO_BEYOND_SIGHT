@@ -2,6 +2,7 @@ export type SpatialZone = 'left' | 'center' | 'right';
 export type ClockDirection = "10 o'clock" | "12 o'clock" | "2 o'clock" | "9 o'clock" | "11 o'clock" | "1 o'clock" | "3 o'clock";
 export type ProximityTier = 'danger' | 'close' | 'far';
 export type CardinalDirection = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
+export type NavigationMode = 'home' | 'road';
 
 export interface BoundingBox {
   x: number;
@@ -27,6 +28,7 @@ export interface DetectedObject {
   relativeBearingDegrees?: number; // -180 to +180 relative to user heading
   compassHeading?: number; // 0 - 360 absolute compass
   personFacing?: 'facing you' | 'facing away' | 'side profile';
+  isSelfUser?: boolean; // User detected in front camera/webcam
   // Road & Vehicle Safety Sentinel
   isVehicle?: boolean;
   isApproachingFast?: boolean;
@@ -83,4 +85,6 @@ export interface VisionSettings {
   highContrastMode: boolean;
   minConfidence: number;
   autoGuidance: boolean;
+  defaultMode?: NavigationMode;
+  ignoreSelfInFrontCamera?: boolean;
 }

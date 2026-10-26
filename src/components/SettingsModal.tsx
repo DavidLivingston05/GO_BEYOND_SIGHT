@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Key, Cpu, Volume2, Users, Trash2, Check, Sparkles, ShieldCheck } from 'lucide-react';
+import { X, Key, Cpu, Volume2, Users, Trash2, Check, Sparkles, ShieldCheck, Home } from 'lucide-react';
 import { geminiVisionService } from '../services/geminiVision';
 import { speechManager } from '../services/speechSynthesis';
 import { personMemoryService } from '../services/personMemory';
@@ -250,6 +250,32 @@ const SettingsModalContent: React.FC<{
               ))}
             </div>
           )}
+        </section>
+
+        {/* 4. Environment & Indoor Comfort Mode */}
+        <section className="space-y-3 bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center space-x-2 text-cyan-400 font-bold text-sm">
+            <Home className="w-4 h-4" />
+            <span>Environment &amp; Indoor Comfort Mode</span>
+          </div>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            Standard Home Mode creates a calm, comfortable indoor experience by suppressing repetitive emergency obstacle sirens for everyday household furniture and people.
+          </p>
+
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between bg-black/60 p-3 rounded-xl border border-slate-800">
+              <div>
+                <p className="text-xs font-bold text-white">Ignore Self in Front Camera / Webcam</p>
+                <p className="text-[11px] text-slate-400">Prevents obstacle alarm from triggering when facing your own camera</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.ignoreSelfInFrontCamera !== false}
+                onChange={(e) => onUpdateSettings({ ignoreSelfInFrontCamera: e.target.checked })}
+                className="w-5 h-5 accent-emerald-400 rounded cursor-pointer"
+              />
+            </div>
+          </div>
         </section>
 
         {/* Modal Done Button */}

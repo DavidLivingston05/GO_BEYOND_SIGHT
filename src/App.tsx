@@ -5,13 +5,10 @@ import { speechRecognitionService } from './services/speechRecognition';
 import { objectDetectorService, degreesToCardinal } from './services/objectDetector';
 import { personMemoryService } from './services/personMemory';
 import { geminiVisionService } from './services/geminiVision';
-import type { AssistantState, DetectedObject, VisionSettings, DoorGuidanceInfo } from './types';
+import type { AssistantState, DetectedObject, VisionSettings, DoorGuidanceInfo, NavigationMode } from './types';
 
 import { GiantTouchTarget } from './components/GiantTouchTarget';
 import { CameraRadarCanvas } from './components/CameraRadarCanvas';
-import { DailyItemFinderBar } from './components/DailyItemFinderBar';
-import { VoiceOrb } from './components/VoiceOrb';
-import { AccessibilityControls } from './components/AccessibilityControls';
 import { SettingsModal } from './components/SettingsModal';
 import { EnrollPersonModal } from './components/EnrollPersonModal';
 import { HelpDrawer } from './components/HelpDrawer';
@@ -29,21 +26,23 @@ export function App() {
 
   // Camera & Detection State
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
   const [detections, setDetections] = useState<DetectedObject[]>([]);
   const [doorGuidance, setDoorGuidance] = useState<DoorGuidanceInfo | null>(null);
 
   // Compass Heading & Direction Orientation
   const [userHeading, setUserHeading] = useState(0); // 0 - 360 degrees
 
-  // Road & Street Safety Sentinel Mode
-  const [isRoadMode, setIsRoadMode] = useState(false);
+  // Environment Navigation Mode: Standard Home Mode (Default) vs Road Mode
+  const [navigationMode, setNavigationMode] = useState<NavigationMode>('home');
+  const isRoadMode = navigationMode === 'road';
   const [crosswalkDetected, setCrosswalkDetected] = useState(false);
 
   // Daily Mobility Features
   const [activeTargetItem, setActiveTargetItem] = useState<string | null>(null);
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [isCurtainActive, setIsCurtainActive] = useState(false);
-  const [isEcoMode, setIsEcoMode] = useState(true);
+  const [isEcoMode] = useState(true);
 
   // Modals & Panels
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -68,10 +67,8 @@ export function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectionLoopRef = useRef<number | null>(null);
-  const lastDangerAlertTime = useRef(0);
   const lastVehicleAlertTime = useRef(0);
   const lastTrafficLightAlertTime = useRef(0);
-  const lastClearPathChimeTime = useRef(0);
   const lastTargetPingTime = useRef(0);
   const lastCrosswalkAlertTime = useRef(0);
 
@@ -131,16 +128,17 @@ export function App() {
   }, []);
 
   // 4. Setup Camera Stream
-  const startCamera = useCallback(async () => {
+  const startCamera = useCallback(async (desiredFacing?: 'environment' | 'user') => {
+    const targetFacing = desiredFacing || cameraFacing;
     if (streamRef.current) {
-      setIsCameraActive(true);
-      return;
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
 
     try {
       const constraints: MediaStreamConstraints = {
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: targetFacing },
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
@@ -150,28 +148,49 @@ export function App() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
 
+      // Update state if camera reports actual facingMode
+      const track = stream.getVideoTracks()[0];
+      const settings = track?.getSettings ? track.getSettings() : undefined;
+      if (settings?.facingMode) {
+        setCameraFacing(settings.facingMode as any);
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play().catch(() => {});
       }
       setIsCameraActive(true);
-      setStatusMessage('Scanning environment');
+      setStatusMessage(targetFacing === 'user' ? 'Front Camera / Webcam Active' : 'Scanning environment');
     } catch {
       try {
         const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         streamRef.current = fallbackStream;
+        setCameraFacing('user');
         if (videoRef.current) {
           videoRef.current.srcObject = fallbackStream;
           await videoRef.current.play().catch(() => {});
         }
         setIsCameraActive(true);
-        setStatusMessage('Scanning environment (Front Camera)');
+        setStatusMessage('Scanning environment (Front Camera / Webcam)');
       } catch (err) {
         console.error('Camera access error:', err);
         speechManager.speakUrgent('Camera access was not granted. Please allow camera permissions.');
       }
     }
-  }, []);
+  }, [cameraFacing]);
+
+  // Flip Camera between rear navigation and front webcam
+  const toggleCameraFacing = useCallback(async () => {
+    const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+    setCameraFacing(nextFacing);
+    audioEngine.playGestureFeedback('tap');
+    await startCamera(nextFacing);
+    speechManager.speakReply(
+      nextFacing === 'user'
+        ? 'Switched to front webcam. Standard Home Mode will ignore your face.'
+        : 'Switched to rear navigation camera.'
+    );
+  }, [cameraFacing, startCamera]);
 
   // Auto-request camera on load so user sees camera immediately
   useEffect(() => {
@@ -249,21 +268,25 @@ export function App() {
     });
   }, []);
 
-  // Road & Street Safety Mode Toggle
-  const toggleRoadMode = useCallback(() => {
-    setIsRoadMode((prev) => {
-      const next = !prev;
+  // Environment Navigation Mode Toggle: Standard Home Mode vs Road Mode
+  const toggleNavigationMode = useCallback(() => {
+    setNavigationMode((prev) => {
+      const next = prev === 'home' ? 'road' : 'home';
       audioEngine.playGestureFeedback('swipe');
-      if (next) {
+      if (next === 'road') {
         speechManager.speakUrgent(
           'Road Safety Mode activated. Heightened vehicle approach alert, zebra crosswalk scanning, and pedestrian traffic signal detection are active.'
         );
       } else {
-        speechManager.speakReply('Road Safety Mode turned off. Returning to normal indoor obstacle radar.');
+        speechManager.speakReply(
+          'Standard Home Mode activated. Calming indoor guidance with no false alarms.'
+        );
       }
       return next;
     });
   }, []);
+
+  const toggleRoadMode = toggleNavigationMode;
 
   // Compass Heading Check
   const handleCheckCompass = useCallback(() => {
@@ -274,15 +297,19 @@ export function App() {
 
   // Quick Walk / Path Check
   const handleCheckPathAhead = useCallback(() => {
+    speechManager.cancelAll();
     audioEngine.playGestureFeedback('tap');
 
     const centerObstacles = detections.filter(
-      (d) => d.clockDirection === "12 o'clock" || d.zone === 'center'
+      (d) =>
+        !d.isSelfUser &&
+        (cameraFacing !== 'user' || d.class !== 'person') &&
+        (d.clockDirection === "12 o'clock" || d.zone === 'center')
     );
 
     if (centerObstacles.length === 0) {
       audioEngine.playClearPathChime();
-      speechManager.speakUrgent('Path ahead is completely clear for at least 4 steps. You can walk forward safely.');
+      speechManager.speakReply('Path ahead is completely clear for at least 4 steps.');
       return;
     }
 
@@ -290,15 +317,10 @@ export function App() {
     const name = closest.matchedPersonName || closest.class;
     const cardinal = closest.cardinalDirection ? ` (${closest.cardinalDirection})` : '';
 
-    if (closest.proximityTier === 'danger') {
-      audioEngine.playDangerAlert();
-      speechManager.speakUrgent(`Caution! ${name} is right in front of you at 12 o'clock${cardinal}, only ${closest.estimatedSteps} step away! Stop.`);
-    } else {
-      speechManager.speakReply(
-        `Obstacle ahead: ${name} at 12 o'clock${cardinal}, ${closest.estimatedMeters} meters away (${closest.estimatedSteps} steps). Step slightly left or right.`
-      );
-    }
-  }, [detections]);
+    speechManager.speakReply(
+      `${name} ahead at 12 o'clock${cardinal}, ${closest.estimatedMeters} meters away (${closest.estimatedSteps} steps). Step slightly to your side.`
+    );
+  }, [detections, cameraFacing]);
 
   // 5. Voice Commands Handler
   const handleVoiceCommand = useCallback(
@@ -346,15 +368,46 @@ export function App() {
         return;
       }
 
+      // 2c2. Flip Camera
+      if (commandType === 'flip_camera') {
+        await toggleCameraFacing();
+        return;
+      }
+
       // 2d. Check Path
       if (commandType === 'check_path') {
         handleCheckPathAhead();
         return;
       }
 
-      // 2e. Road Mode toggle
+      // 2e. Set Home / Standard Mode
+      if (commandType === 'set_home_mode') {
+        setNavigationMode('home');
+        setActiveTargetItem(null);
+        audioEngine.playGestureFeedback('swipe');
+        speechManager.speakReply('Standard Home Mode active. Calming indoor navigation with no false alarms.');
+        return;
+      }
+
+      // 2f. Set Road Mode
+      if (commandType === 'set_road_mode') {
+        setNavigationMode('road');
+        audioEngine.playGestureFeedback('swipe');
+        speechManager.speakUrgent('Road Safety Mode active. Monitoring vehicles and street crossings.');
+        return;
+      }
+
+      // 2g. Cancel Target & Beacon
+      if (commandType === 'cancel_target') {
+        setActiveTargetItem(null);
+        audioEngine.playDeactivationChime();
+        speechManager.speakReply('Target search and acoustic beacons stopped.');
+        return;
+      }
+
+      // 2h. Road Mode toggle
       if (commandType === 'toggle_road_mode') {
-        toggleRoadMode();
+        toggleNavigationMode();
         return;
       }
 
@@ -443,7 +496,11 @@ export function App() {
       }
 
       // 3. Remember Person
-      if (commandType === 'remember_person' && extra?.personName) {
+      if (commandType === 'remember_person') {
+        if (!extra?.personName) {
+          handleOpenEnrollModal();
+          return;
+        }
         const name = extra.personName;
         const video = videoRef.current;
         if (!video || !isCameraActive) {
@@ -536,11 +593,14 @@ export function App() {
         return;
       }
 
-      // 6. Describe the room
+      // 6. Describe the room & spatial location
       if (commandType === 'describe_room') {
+        speechManager.cancelAll();
         setAssistantState('thinking');
         audioEngine.playThinkingChime();
+        setStatusMessage('Scanning room & surroundings...');
 
+        // 1. If Gemini Vision key is present, perform deep multimodal spatial room narration
         if (geminiVisionService.hasApiKey() && videoRef.current) {
           const base64 = geminiVisionService.captureFrameBase64(videoRef.current);
           if (base64) {
@@ -548,31 +608,74 @@ export function App() {
               const desc = await geminiVisionService.describeRoom(base64);
               speechManager.speakReply(desc);
               return;
-            } catch {
-              // Fallback
+            } catch (err) {
+              console.warn('Gemini vision description fallback:', err);
             }
           }
         }
 
-        if (detections.length === 0) {
-          speechManager.speakReply(
-            'The area immediately ahead appears clear of major obstacles within 3 meters. You can step forward slowly.'
-          );
-        } else {
-          const summaryParts = detections.slice(0, 3).map((d) => {
-            const name = d.matchedPersonName ? `${d.matchedPersonName}` : `a ${d.class}`;
-            const cardinal = d.cardinalDirection ? ` (${d.cardinalDirection})` : '';
-            return `${name} at ${d.clockDirection}${cardinal}, ${d.estimatedMeters} meters away`;
-          });
-          speechManager.speakReply(
-            `I detect ${detections.length} items around you: ${summaryParts.join('; ')}.`
-          );
+        // 2. Local Intelligent Spatial Room & Surroundings Narration
+        const cardinal = degreesToCardinal(userHeading);
+        const validItems = detections.filter(
+          (d) => !d.isSelfUser && (cameraFacing !== 'user' || d.class !== 'person')
+        );
+
+        // Path clearance straight ahead
+        const pathBlockers = validItems.filter(
+          (d) => (d.clockDirection === "12 o'clock" || d.zone === 'center') && d.estimatedMeters < 2.5
+        );
+
+        let pathText = 'Straight ahead is completely open for walking at least 4 steps.';
+        if (pathBlockers.length > 0) {
+          const blocker = [...pathBlockers].sort((a, b) => a.estimatedMeters - b.estimatedMeters)[0];
+          pathText = `Directly ahead at 12 o'clock is a ${blocker.class}, about ${blocker.estimatedMeters} meters away (${blocker.estimatedSteps} steps).`;
         }
+
+        const chairs = validItems.filter((d) =>
+          ['chair', 'couch', 'bed', 'bench', 'armchair', 'seat', 'sofa'].includes(d.class.toLowerCase())
+        );
+        const tables = validItems.filter((d) =>
+          ['dining table', 'desk', 'table'].includes(d.class.toLowerCase())
+        );
+        const doors = doorGuidance && doorGuidance.confidence > 0.35 ? [doorGuidance] : [];
+        const people = validItems.filter((d) => d.class === 'person');
+
+        const narrationParts: string[] = [
+          `You are facing ${cardinal} (${userHeading}°).`,
+          pathText,
+        ];
+
+        if (chairs.length > 0) {
+          const c = chairs[0];
+          narrationParts.push(`There is a ${c.class} at your ${c.clockDirection}, about ${c.estimatedMeters} meters away (${c.estimatedSteps} steps).`);
+        }
+
+        if (tables.length > 0) {
+          const t = tables[0];
+          narrationParts.push(`A ${t.class} is at your ${t.clockDirection}, ${t.estimatedMeters} meters away.`);
+        }
+
+        if (doors.length > 0) {
+          const d = doors[0];
+          narrationParts.push(`A doorway is at your ${d.direction}, approximately ${d.meters} meters away.`);
+        } else if (validItems.length > 0 && chairs.length === 0 && tables.length === 0) {
+          const other = validItems.slice(0, 2).map((d) => `${d.class} at ${d.clockDirection}`).join(' and ');
+          narrationParts.push(`Nearby items include ${other}.`);
+        }
+
+        if (people.length > 0) {
+          const p = people[0];
+          const name = p.matchedPersonName ? p.matchedPersonName : 'A person';
+          narrationParts.push(`${name} is standing at your ${p.clockDirection}, ${p.estimatedMeters} meters away.`);
+        }
+
+        speechManager.speakReply(narrationParts.join(' '));
         return;
       }
 
       // 7. Read Text
       if (commandType === 'read_text') {
+        speechManager.cancelAll();
         setAssistantState('thinking');
         audioEngine.playThinkingChime();
 
@@ -594,22 +697,63 @@ export function App() {
         return;
       }
 
-      // 8. Specific object search
+      // 8. Specific Object Navigation (e.g. "Where is the chair?")
       if (commandType === 'find_object' && extra?.targetObject) {
+        speechManager.cancelAll();
         const target = extra.targetObject.toLowerCase().trim();
         setActiveTargetItem(target);
+        setAssistantState('thinking');
+        audioEngine.playThinkingChime();
 
-        const found = detections.find((d) => d.class.toLowerCase().includes(target));
-        if (found) {
-          audioEngine.playTargetSeekerPing(found.estimatedMeters / 4, true);
+        // Synonym mapping for common assistive objects
+        const synonymMap: Record<string, string[]> = {
+          chair: ['chair', 'couch', 'bed', 'bench', 'armchair', 'seat', 'sofa'],
+          bottle: ['bottle', 'cup', 'wine glass', 'mug', 'bowl', 'glass'],
+          phone: ['cell phone', 'phone', 'remote'],
+          table: ['dining table', 'desk', 'table'],
+          person: ['person'],
+        };
+
+        const targetSynonyms = synonymMap[target] || [target];
+
+        const match = detections.find((d) =>
+          !d.isSelfUser && targetSynonyms.some((s) => d.class.toLowerCase().includes(s))
+        );
+
+        if (match) {
+          audioEngine.playTargetSeekerPing(match.estimatedMeters / 4, true);
+
+          let turnGuidance = '';
+          if (match.clockDirection === "12 o'clock" || match.zone === 'center') {
+            turnGuidance = 'It is straight in front of you. Walk forward carefully.';
+          } else if (match.clockDirection.includes('1') || match.clockDirection.includes('2') || match.zone === 'right') {
+            turnGuidance = 'Turn to your right to face it directly.';
+          } else {
+            turnGuidance = 'Turn to your left to face it directly.';
+          }
+
           speechManager.speakReply(
-            `Found ${found.class} at your ${found.clockDirection} (${found.cardinalDirection}), approximately ${found.estimatedMeters} meters ahead (${found.estimatedSteps} steps).`
+            `The ${target} is at your ${match.clockDirection} (${match.cardinalDirection}), about ${match.estimatedMeters} meters away (${match.estimatedSteps} steps). ${turnGuidance}`
           );
           return;
         }
 
+        // If not immediately found in local detections, ask Gemini Vision
+        if (geminiVisionService.hasApiKey() && videoRef.current) {
+          const base64 = geminiVisionService.captureFrameBase64(videoRef.current);
+          if (base64) {
+            try {
+              const res = await geminiVisionService.findTarget(base64, target);
+              speechManager.speakReply(res);
+              return;
+            } catch {
+              // Fallback below
+            }
+          }
+        }
+
         speechManager.speakReply(
-          `Seeking ${target}. Point your camera slowly across the room. Audio sonar will beep when you aim at it.`
+          `I do not see the ${target} directly ahead right now. Slowly turn your camera across the room so I can locate it for you.`
         );
         return;
       }
@@ -717,88 +861,90 @@ export function App() {
 
           const now = Date.now();
 
-          // 1. Road Safety Sentinel: Approaching Vehicle Warning!
-          const fastVehicle = detected.find((d) => d.isVehicle && d.isApproachingFast);
-          if (fastVehicle && now - lastVehicleAlertTime.current > 2800) {
-            lastVehicleAlertTime.current = now;
-            audioEngine.playApproachingVehicleSiren(fastVehicle.zone);
-            speechManager.speakUrgent(
-              `WARNING! Fast ${fastVehicle.class} approaching at your ${fastVehicle.clockDirection} (${fastVehicle.cardinalDirection})! Step back on curb!`
-            );
-          }
+          // 1. Road Safety Sentinel: Approaching Vehicles, Traffic Lights, Crosswalks (Road Mode Only)
+          let fastVehicle: DetectedObject | undefined = undefined;
+          if (navigationMode === 'road') {
+            fastVehicle = detected.find((d) => d.isVehicle && d.isApproachingFast);
+            if (fastVehicle && now - lastVehicleAlertTime.current > 3200) {
+              lastVehicleAlertTime.current = now;
+              audioEngine.playApproachingVehicleSiren(fastVehicle.zone);
+              speechManager.speakUrgent(
+                `WARNING! Fast ${fastVehicle.class} approaching at your ${fastVehicle.clockDirection} (${fastVehicle.cardinalDirection})! Step back on curb!`
+              );
+            }
 
-          // 2. Traffic Light State Alert (Pedestrian Signal)
-          const trafficLight = detected.find((d) => d.class === 'traffic light');
-          if (trafficLight && trafficLight.trafficLightState && now - lastTrafficLightAlertTime.current > 5000) {
-            lastTrafficLightAlertTime.current = now;
-            if (trafficLight.trafficLightState === 'green') {
-              audioEngine.playTrafficLightAPS('green');
-              speechManager.speakBackground('Walk signal is GREEN. Safe to cross.');
-            } else if (trafficLight.trafficLightState === 'red') {
-              audioEngine.playTrafficLightAPS('red');
-              speechManager.speakBackground('Traffic light is RED. Wait.');
+            // Traffic Light State Alert (Pedestrian Signal)
+            const trafficLight = detected.find((d) => d.class === 'traffic light');
+            if (trafficLight && trafficLight.trafficLightState && now - lastTrafficLightAlertTime.current > 6000) {
+              lastTrafficLightAlertTime.current = now;
+              if (trafficLight.trafficLightState === 'green') {
+                audioEngine.playTrafficLightAPS('green');
+                speechManager.speakBackground('Walk signal is GREEN. Safe to cross.');
+              } else if (trafficLight.trafficLightState === 'red') {
+                audioEngine.playTrafficLightAPS('red');
+                speechManager.speakBackground('Traffic light is RED. Wait.');
+              }
+            }
+
+            // Crosswalk Alert
+            if (hasCrosswalk && now - lastCrosswalkAlertTime.current > 8000) {
+              lastCrosswalkAlertTime.current = now;
+              audioEngine.playCrosswalkChime();
+              speechManager.speakBackground('Zebra crosswalk ahead.');
             }
           }
 
-          // 3. Crosswalk Alert
-          if (hasCrosswalk && now - lastCrosswalkAlertTime.current > 7000) {
-            lastCrosswalkAlertTime.current = now;
-            audioEngine.playCrosswalkChime();
-            speechManager.speakBackground('Zebra crosswalk ahead.');
-          }
-
-          // 4. Door Acoustic Homing Beacon (if user is searching for door)
-          if (activeTargetItem === 'door' && doorResult && now - lastTargetPingTime.current > 350) {
-            lastTargetPingTime.current = now;
-            audioEngine.playDoorHomingBeacon(
-              Math.abs(doorResult.turnOffsetDeg) < 10,
-              doorResult.turnOffsetDeg
-            );
-          } else if (activeTargetItem && activeTargetItem !== 'door') {
-            // General Item Finder Audio Seeker
+          // 2. Target Navigation Orientation
+          if (activeTargetItem) {
+            const synonymMap: Record<string, string[]> = {
+              chair: ['chair', 'couch', 'bed', 'bench', 'armchair', 'seat', 'sofa'],
+              bottle: ['bottle', 'cup', 'wine glass', 'mug', 'bowl', 'glass'],
+              phone: ['cell phone', 'phone', 'remote'],
+              table: ['dining table', 'desk', 'table'],
+              door: ['door', 'doorway', 'exit'],
+            };
+            const synonyms = synonymMap[activeTargetItem] || [activeTargetItem];
             const targetObj = detected.find(
               (d) =>
-                d.class.toLowerCase().includes(activeTargetItem.toLowerCase()) ||
-                (d.matchedPersonName && d.matchedPersonName.toLowerCase().includes(activeTargetItem.toLowerCase()))
+                !d.isSelfUser &&
+                (synonyms.some((s) => d.class.toLowerCase().includes(s)) ||
+                  (d.matchedPersonName && d.matchedPersonName.toLowerCase().includes(activeTargetItem.toLowerCase())))
             );
 
-            if (targetObj && now - lastTargetPingTime.current > 400) {
-              lastTargetPingTime.current = now;
+            if (targetObj) {
               const isCentered = targetObj.zone === 'center' || targetObj.clockDirection === "12 o'clock";
-              audioEngine.playTargetSeekerPing(targetObj.estimatedMeters / 4, isCentered);
+              if (isCentered) {
+                // User has turned and is directly facing the target!
+                audioEngine.playSuccessTone();
+                speechManager.speakReply(
+                  `You are facing the ${activeTargetItem} directly ahead, ${targetObj.estimatedSteps} steps away.`
+                );
+                setActiveTargetItem(null); // Objective reached!
+              } else if (now - lastTargetPingTime.current > 1400) {
+                lastTargetPingTime.current = now;
+                audioEngine.playTargetSeekerPing(targetObj.estimatedMeters / 4, false);
+              }
             }
           }
 
-          // 5. 3D Spatial Audio Radar Sonar
-          if (settings.spatialRadarEnabled && detected.length > 0 && !activeTargetItem && !fastVehicle) {
-            const sortedByDistance = [...detected].sort((a, b) => a.estimatedMeters - b.estimatedMeters);
+          // 3. Filter detections for Home Mode (ignore self on webcam)
+          const validDetections = detected.filter((d) => {
+            if (navigationMode === 'home') {
+              if (settings.ignoreSelfInFrontCamera !== false) {
+                if (d.isSelfUser || (cameraFacing === 'user' && d.class === 'person')) {
+                  return false;
+                }
+              }
+            }
+            return true;
+          });
+
+          // 4. Subtle Spatial Radar audio ping only when explicitly active
+          if (settings.spatialRadarEnabled && validDetections.length > 0 && !activeTargetItem && !fastVehicle) {
+            const sortedByDistance = [...validDetections].sort((a, b) => a.estimatedMeters - b.estimatedMeters);
             const closest = sortedByDistance[0];
+            // Subtle, non-intrusive radar ping
             audioEngine.playSpatialRadarPing(closest.zone, closest.proximityTier);
-          }
-
-          // 6. Clear Path Reassurance Chime
-          const centerObstacles = detected.filter(
-            (d) => d.clockDirection === "12 o'clock" || d.zone === 'center'
-          );
-          if (
-            settings.spatialRadarEnabled &&
-            centerObstacles.length === 0 &&
-            !fastVehicle &&
-            now - lastClearPathChimeTime.current > 6000
-          ) {
-            lastClearPathChimeTime.current = now;
-            audioEngine.playClearPathChime();
-          }
-
-          // 7. Immediate Danger Obstacle Warning (< 1.2m)
-          const dangerItem = detected.find((d) => d.proximityTier === 'danger');
-          if (dangerItem && !fastVehicle && now - lastDangerAlertTime.current > 3200) {
-            lastDangerAlertTime.current = now;
-            audioEngine.playDangerAlert();
-            const alertName = dangerItem.matchedPersonName || dangerItem.class;
-            speechManager.speakUrgent(
-              `Caution! ${alertName} at your ${dangerItem.clockDirection} (${dangerItem.cardinalDirection}), less than 1.2 meters away! Stop.`
-            );
           }
         } catch {
           // Frame skip
@@ -823,10 +969,13 @@ export function App() {
     isCameraActive,
     settings.minConfidence,
     settings.spatialRadarEnabled,
+    settings.ignoreSelfInFrontCamera,
     activeTargetItem,
     isEcoMode,
     isCurtainActive,
     userHeading,
+    navigationMode,
+    cameraFacing,
   ]);
 
   // Initial Accessibility Unlock
@@ -839,7 +988,7 @@ export function App() {
     await startCamera();
 
     speechManager.speakReply(
-      'Beyond Sight active with compass direction guidance and Road Safety Sentinel. Say Hey Vision anytime.'
+      'Beyond Sight active in Standard Home Mode. Say Hey Vision anytime.'
     );
   };
 
@@ -883,16 +1032,16 @@ export function App() {
   };
 
   return (
-    <div className="relative w-screen h-screen flex flex-col justify-between bg-black text-white overflow-hidden select-none">
-      {/* 1. Translucent Giant Touch Overlay */}
+    <div className="relative w-screen h-screen bg-black text-white overflow-hidden select-none">
+      {/* 1. Translucent Initial Unlock Overlay */}
       <GiantTouchTarget
         onUnlock={handleInitialUnlock}
         isUnlocked={isUnlocked}
         isLoadingModels={isLoadingModels}
       />
 
-      {/* 2. Live Camera Viewfinder with 3D Radar, Compass & Road Safety */}
-      <main className="relative flex-1 w-full h-full overflow-hidden">
+      {/* 2. Pure Full-Screen Live Camera Viewfinder (Zero Buttons, Edge-to-Edge) */}
+      <main className="absolute inset-0 w-full h-full overflow-hidden bg-black">
         <CameraRadarCanvas
           videoRef={videoRef}
           detections={detections}
@@ -901,20 +1050,10 @@ export function App() {
           doorGuidance={doorGuidance}
           targetItem={activeTargetItem}
           userHeading={userHeading}
-          isTorchOn={isTorchOn}
-          onToggleTorch={toggleTorch}
           isCurtainActive={isCurtainActive}
           onToggleCurtain={toggleCurtain}
-          isEcoMode={isEcoMode}
-          onToggleEcoMode={() => setIsEcoMode((prev) => !prev)}
-          isRadarMuted={!settings.spatialRadarEnabled}
-          onToggleRadar={() => {
-            const updated = !settings.spatialRadarEnabled;
-            setSettings((prev) => ({ ...prev, spatialRadarEnabled: updated }));
-            speechManager.speakReply(updated ? '3D audio radar unmuted.' : '3D audio radar muted.');
-          }}
+          navigationMode={navigationMode}
           isRoadMode={isRoadMode}
-          onToggleRoadMode={toggleRoadMode}
           crosswalkDetected={crosswalkDetected}
           onSingleTap={handleCheckPathAhead}
           onDoubleTap={() => handleVoiceCommand('describe_room', 'describe the room')}
@@ -923,65 +1062,39 @@ export function App() {
         />
       </main>
 
-      {/* 3. Bottom Controls, Daily Navigation & Voice Assistant */}
-      <div className="relative z-30 w-full flex flex-col items-center pointer-events-none pb-1">
-        <VoiceOrb
-          state={assistantState}
-          transcript={liveTranscript}
-          isListening={isListening}
-          onOrbClick={handlePushToTalk}
-          statusMessage={statusMessage}
-        />
-
-        {/* Daily Item, Road Mode & Compass Quick Bar */}
-        <div className="w-full px-2 sm:px-4 pointer-events-auto pb-1.5">
-          <DailyItemFinderBar
-            activeTarget={activeTargetItem}
-            onSelectTarget={(target) => {
-              setActiveTargetItem(target);
-              if (target) {
-                audioEngine.playActivationChime();
-                speechManager.speakReply(`Searching for ${target}. Turn camera slowly until acoustic beacon locks on.`);
-              } else {
-                speechManager.speakReply('Target search cancelled. Returning to general obstacle radar.');
-              }
-            }}
-            onCheckPath={handleCheckPathAhead}
-            onReadText={() => handleVoiceCommand('read_text', 'read text')}
-            isRoadMode={isRoadMode}
-            onToggleRoadMode={toggleRoadMode}
-            onCheckCompass={handleCheckCompass}
-            isRadarMuted={!settings.spatialRadarEnabled}
-            onToggleRadar={() => {
-              const updated = !settings.spatialRadarEnabled;
-              setSettings((prev) => ({ ...prev, spatialRadarEnabled: updated }));
-              speechManager.speakReply(updated ? '3D audio radar unmuted.' : '3D audio radar muted.');
-            }}
-          />
+      {/* 3. Ambient Floating Voice Indicator (Purely visual feedback, zero buttons) */}
+      {(isListening || liveTranscript || assistantState === 'speaking' || assistantState === 'listening' || assistantState === 'thinking') && (
+        <div className="absolute top-5 inset-x-4 sm:inset-x-12 z-30 flex flex-col items-center pointer-events-none transition-all duration-300 animate-fadeIn">
+          <div className="max-w-md w-full bg-black/80 backdrop-blur-xl border border-cyan-400/40 rounded-full px-5 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.8)] flex items-center space-x-3 text-left">
+            <span
+              className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                assistantState === 'listening'
+                  ? 'bg-cyan-400 animate-ping'
+                  : assistantState === 'thinking'
+                  ? 'bg-purple-400 animate-spin'
+                  : 'bg-emerald-400 animate-pulse'
+              }`}
+            />
+            <div className="flex-1 overflow-hidden">
+              {liveTranscript ? (
+                <p className="text-xs sm:text-sm font-semibold text-white tracking-wide truncate">
+                  &ldquo;{liveTranscript}&rdquo;
+                </p>
+              ) : (
+                <p className="text-xs text-cyan-200 font-medium truncate">
+                  {assistantState === 'listening'
+                    ? 'Listening...'
+                    : assistantState === 'thinking'
+                    ? 'Scanning...'
+                    : statusMessage}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
+      )}
 
-        {/* Tactile Accessibility Navigation Bar */}
-        <div className="w-full px-2 sm:px-4 pointer-events-auto">
-          <AccessibilityControls
-            isCameraActive={isCameraActive}
-            onToggleCamera={toggleCamera}
-            isRadarMuted={!settings.spatialRadarEnabled}
-            onToggleRadar={() => {
-              const updated = !settings.spatialRadarEnabled;
-              setSettings((prev) => ({ ...prev, spatialRadarEnabled: updated }));
-              speechManager.speakReply(updated ? '3D audio radar unmuted.' : '3D audio radar muted.');
-            }}
-            onOpenPersonEnrollment={handleOpenEnrollModal}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-            onOpenHelp={() => setIsHelpOpen(true)}
-            onPushToTalk={handlePushToTalk}
-            isListening={isListening}
-            onDescribeScene={() => handleVoiceCommand('describe_room', 'describe the room')}
-          />
-        </div>
-      </div>
-
-      {/* 4. Modals & Drawers */}
+      {/* 4. Accessibility Modals & Drawers */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

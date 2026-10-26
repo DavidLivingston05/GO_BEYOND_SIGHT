@@ -8,17 +8,21 @@ import {
   FileText,
   Compass,
   Car,
+  Home,
   Volume2,
   VolumeX,
 } from 'lucide-react';
+import type { NavigationMode } from '../types';
 
 export interface DailyItemFinderBarProps {
   activeTarget: string | null;
   onSelectTarget: (target: string | null) => void;
   onCheckPath: () => void;
   onReadText: () => void;
-  isRoadMode: boolean;
-  onToggleRoadMode: () => void;
+  navigationMode?: NavigationMode;
+  onToggleNavigationMode?: () => void;
+  isRoadMode?: boolean;
+  onToggleRoadMode?: () => void;
   onCheckCompass: () => void;
   isRadarMuted: boolean;
   onToggleRadar: () => void;
@@ -29,12 +33,17 @@ export const DailyItemFinderBar: React.FC<DailyItemFinderBarProps> = ({
   onSelectTarget,
   onCheckPath,
   onReadText,
-  isRoadMode,
+  navigationMode = 'home',
+  onToggleNavigationMode,
+  isRoadMode = false,
   onToggleRoadMode,
   onCheckCompass,
   isRadarMuted,
   onToggleRadar,
 }) => {
+  const isRoad = navigationMode === 'road' || isRoadMode;
+  const toggleMode = onToggleNavigationMode || onToggleRoadMode;
+
   const dailyItems = [
     { id: 'door', label: 'Door / Exit', icon: DoorOpen, targetClass: 'door' },
     { id: 'bottle', label: 'Bottle / Cup', icon: Coffee, targetClass: 'bottle' },
@@ -63,21 +72,25 @@ export const DailyItemFinderBar: React.FC<DailyItemFinderBarProps> = ({
           </span>
         </button>
 
-        {/* 2. Road Safety Sentinel Mode Toggle */}
+        {/* 2. Environment Mode (Home Standard vs Road Outdoor) */}
         <button
           type="button"
-          onClick={onToggleRoadMode}
-          aria-label={isRoadMode ? 'Disable Road Safety Mode' : 'Enable Road Safety Mode'}
-          aria-pressed={isRoadMode}
+          onClick={toggleMode}
+          aria-label={isRoad ? 'Switch to Standard Home Mode' : 'Switch to Road Safety Sentinel Mode'}
+          aria-pressed={isRoad}
           className={`flex-1 min-w-[70px] max-w-[125px] py-2.5 px-1 rounded-xl flex flex-col items-center justify-center space-y-1 text-center transition-all active:scale-95 border ${
-            isRoadMode
+            isRoad
               ? 'bg-red-600 text-white font-black shadow-[0_0_15px_rgba(239,68,68,0.6)] border-red-300 animate-pulse'
-              : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-800'
+              : 'bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
           }`}
         >
-          <Car className={`w-4 h-4 sm:w-5 sm:h-5 shrink-0 ${isRoadMode ? 'text-white' : 'text-red-400'}`} />
+          {isRoad ? (
+            <Car className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-white" />
+          ) : (
+            <Home className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-emerald-400" />
+          )}
           <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider truncate w-full">
-            {isRoadMode ? 'Road ON' : 'Road Mode'}
+            {isRoad ? 'Road Mode' : 'Home (Std)'}
           </span>
         </button>
 

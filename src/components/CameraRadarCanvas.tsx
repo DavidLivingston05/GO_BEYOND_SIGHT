@@ -1,19 +1,10 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import {
-  ShieldAlert,
   VideoOff,
-  Flashlight,
-  FlashlightOff,
-  Eye,
-  EyeOff,
   Leaf,
   Sparkles,
-  Volume2,
-  VolumeX,
-  Compass,
-  AlertTriangle,
 } from 'lucide-react';
-import type { DetectedObject, DoorGuidanceInfo } from '../types';
+import type { DetectedObject, DoorGuidanceInfo, NavigationMode } from '../types';
 import { degreesToCardinal } from '../services/objectDetector';
 
 interface CameraRadarCanvasProps {
@@ -24,16 +15,10 @@ interface CameraRadarCanvasProps {
   doorGuidance?: DoorGuidanceInfo | null;
   targetItem?: string | null;
   userHeading?: number; // 0 - 360 compass degrees
-  isTorchOn?: boolean;
-  onToggleTorch?: () => void;
   isCurtainActive?: boolean;
   onToggleCurtain?: () => void;
-  isEcoMode?: boolean;
-  onToggleEcoMode?: () => void;
-  isRadarMuted?: boolean;
-  onToggleRadar?: () => void;
+  navigationMode?: NavigationMode;
   isRoadMode?: boolean;
-  onToggleRoadMode?: () => void;
   crosswalkDetected?: boolean;
   onSingleTap?: () => void;
   onDoubleTap?: () => void;
@@ -49,29 +34,23 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
   doorGuidance,
   targetItem,
   userHeading = 0,
-  isTorchOn = false,
-  onToggleTorch,
   isCurtainActive = false,
   onToggleCurtain,
-  isEcoMode = true,
-  onToggleEcoMode,
-  isRadarMuted = false,
-  onToggleRadar,
+  navigationMode = 'home',
   isRoadMode = false,
-  onToggleRoadMode,
   crosswalkDetected = false,
   onSingleTap,
   onDoubleTap,
   onLongPressStart,
   onLongPressEnd,
 }) => {
+  const isRoad = navigationMode === 'road' || isRoadMode;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Gesture handling state
   const touchTimerRef = useRef<number | null>(null);
   const lastTapTimeRef = useRef<number>(0);
-  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isLongPressActiveRef = useRef<boolean>(false);
   const [gestureFeedbackText, setGestureFeedbackText] = useState<string | null>(null);
 
@@ -80,11 +59,6 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
     setGestureFeedbackText(text);
     window.setTimeout(() => setGestureFeedbackText(null), 1800);
   }, []);
-
-  // Check if any obstacle is in Immediate Danger tier (< 1.2m)
-  const dangerObstacle = detections.find((d) => d.proximityTier === 'danger');
-  const approachingVehicle = detections.find((d) => d.isVehicle && d.isApproachingFast);
-  const userCardinal = degreesToCardinal(userHeading);
 
   // Render authentic camera autofocus boxes, 3D LiDAR radar, and compass HUD
   useEffect(() => {
@@ -324,7 +298,8 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
         });
 
         // 5. Door Direction Guidance HUD with Turn Angle & Compass Bearing
-        if (doorGuidance && doorGuidance.confidence > 0.35) {
+        // Only show floating banner when user is actively searching for the door
+        if (targetItem === 'door' && doorGuidance && doorGuidance.confidence > 0.35) {
           const doorTurn = doorGuidance.turnOffsetDeg === 0
             ? 'STRAIGHT AHEAD'
             : doorGuidance.turnOffsetDeg < 0
@@ -348,8 +323,8 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
           ctx.fillText(doorMsg, displayW / 2, displayH - 48);
         }
 
-        // 6. Crosswalk / Zebra Crossing HUD
-        if (crosswalkDetected) {
+        // 6. Crosswalk / Zebra Crossing HUD (Outdoor / Road Mode only)
+        if (isRoad && crosswalkDetected) {
           ctx.fillStyle = 'rgba(250, 204, 21, 0.95)';
           ctx.strokeStyle = '#ca8a04';
           ctx.lineWidth = 1.5;
@@ -456,9 +431,9 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
         }
 
         ctx.font = 'bold 8px monospace';
-        ctx.fillStyle = isRoadMode ? '#f87171' : '#38bdf8';
+        ctx.fillStyle = isRoad ? '#f87171' : '#34d399';
         ctx.textAlign = 'center';
-        ctx.fillText(isRoadMode ? 'ROAD RADAR' : '3D LIDAR', radarCX, radarCY + radarR + 11);
+        ctx.fillText(isRoad ? 'ROAD RADAR' : 'HOME LIDAR', radarCX, radarCY + radarR + 11);
       }
       animId = requestAnimationFrame(render);
     };
@@ -475,44 +450,33 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
     doorGuidance,
     targetItem,
     userHeading,
-    isRoadMode,
+    isRoad,
     crosswalkDetected,
   ]);
 
-  // Touch & Click Gesture Listeners for Blind Users
-  const handleTouchStart = (e: React.TouchEvent) => {
-    const touches = e.touches;
-
-    // Three-finger tap triggers Screen Curtain (OLED Power Saver)
-    if (touches.length === 3) {
+  // Pointer and Touch Handling for Blind Users & Desktop Webcams
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (isCurtainActive) {
       if (onToggleCurtain) onToggleCurtain();
-      triggerVisualFeedback('Eco Screen Curtain Toggled');
       return;
     }
-
-    if (touches.length === 1) {
-      const touch = touches[0];
-      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
-      isLongPressActiveRef.current = false;
-
-      // Start long-press timer (500ms) for Push-to-Talk voice query
-      touchTimerRef.current = window.setTimeout(() => {
-        isLongPressActiveRef.current = true;
-        if (onLongPressStart) {
-          onLongPressStart();
-          triggerVisualFeedback('Listening (Release to ask)...');
-        }
-      }, 500);
-    }
+    isLongPressActiveRef.current = false;
+    touchTimerRef.current = window.setTimeout(() => {
+      isLongPressActiveRef.current = true;
+      if (onLongPressStart) {
+        onLongPressStart();
+        triggerVisualFeedback('Listening (Release to ask)...');
+      }
+    }, 500);
   };
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
+  const handlePointerUp = () => {
     if (touchTimerRef.current) {
       clearTimeout(touchTimerRef.current);
       touchTimerRef.current = null;
     }
 
-    // If was holding for push-to-talk, release and end query
     if (isLongPressActiveRef.current) {
       isLongPressActiveRef.current = false;
       if (onLongPressEnd) {
@@ -522,44 +486,28 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
       return;
     }
 
-    // Detect Vertical Swipe (Up = Torch On, Down = Torch Off)
-    if (touchStartPosRef.current && e.changedTouches.length === 1) {
-      const endTouch = e.changedTouches[0];
-      const deltaY = endTouch.clientY - touchStartPosRef.current.y;
-      const deltaX = Math.abs(endTouch.clientX - touchStartPosRef.current.x);
-
-      // Vertical swipe > 65px with minimal horizontal drift
-      if (Math.abs(deltaY) > 65 && deltaX < 50) {
-        if (onToggleTorch) {
-          onToggleTorch();
-          triggerVisualFeedback(deltaY < 0 ? 'Flashlight ON' : 'Flashlight OFF');
-        }
-        return;
-      }
-    }
-
-    // Detect Single-Tap vs Double-Tap
     const now = Date.now();
     const timeSinceLastTap = now - lastTapTimeRef.current;
 
-    if (timeSinceLastTap < 320) {
-      // Double Tap!
+    if (timeSinceLastTap < 350) {
+      // Double Tap! Triggers "Describe the room"
       lastTapTimeRef.current = 0;
       if (onDoubleTap) {
         onDoubleTap();
-        triggerVisualFeedback('Scene Examination');
+        triggerVisualFeedback('Scanning & Describing Room...');
       }
     } else {
+      // Single Tap! Checks path & listens
       lastTapTimeRef.current = now;
       window.setTimeout(() => {
-        if (Date.now() - lastTapTimeRef.current >= 300 && lastTapTimeRef.current !== 0) {
+        if (Date.now() - lastTapTimeRef.current >= 330 && lastTapTimeRef.current !== 0) {
           if (onSingleTap) {
             onSingleTap();
-            triggerVisualFeedback('Checking Path Ahead');
+            triggerVisualFeedback('Path Check');
           }
           lastTapTimeRef.current = 0;
         }
-      }, 310);
+      }, 340);
     }
   };
 
@@ -567,9 +515,9 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
     <div
       ref={containerRef}
       role="region"
-      aria-label="Live camera viewfinder with compass direction and road safety sentinel. Single tap to check path. Double tap to describe room. Hold anywhere to ask a question."
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
+      aria-label="Clean full screen camera viewfinder with AI voice navigation. Single tap to check path or listen. Double tap to describe room. Hold anywhere to ask a question."
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
       className="relative w-full h-full flex flex-col items-center justify-center bg-black overflow-hidden select-none cursor-pointer"
     >
       {/* 1. Live Camera Stream */}
@@ -622,186 +570,21 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
           </div>
           <h4 className="text-lg font-bold text-slate-300">Screen Curtain Active</h4>
           <p className="text-xs text-slate-500 mt-2 max-w-xs">
-            OLED pixels turned off to save battery. Camera, compass direction tracking, and road sentinel are running in full background mode.
+            Display is off to conserve power. Background AI navigation is actively running.
           </p>
-          <p className="text-[11px] text-yellow-400/80 mt-4 font-mono">
-            Triple-tap screen or tap below to reveal display
+          <p className="text-xs text-yellow-400 mt-4 font-mono font-bold">
+            Tap anywhere to reveal screen
           </p>
-          <button
-            type="button"
-            onClick={onToggleCurtain}
-            className="mt-4 px-5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl border border-slate-700 text-xs font-bold"
-          >
-            Reveal Display
-          </button>
         </div>
       )}
 
-      {/* 4. Top Camera Status HUD */}
-      <div className="absolute top-4 inset-x-4 z-20 flex items-center justify-between pointer-events-none">
-        {/* Left: Live Status & Road Sentinel Toggle */}
-        <div className="flex items-center space-x-2 pointer-events-auto">
-          <div className="flex items-center space-x-1.5 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700 text-xs font-mono text-emerald-400 shadow">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>CAMERA LIVE</span>
-          </div>
-
-          {/* Road Safety Mode Toggle Pill */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onToggleRoadMode) onToggleRoadMode();
-              triggerVisualFeedback(isRoadMode ? 'Road Safety Mode OFF' : 'Road Safety Mode ON');
-            }}
-            aria-label="Toggle Road and Traffic Safety Sentinel Mode"
-            className={`px-3 py-1.5 rounded-full text-xs font-mono font-bold flex items-center space-x-1.5 border transition-all active:scale-95 shadow ${
-              isRoadMode
-                ? 'bg-red-600/90 text-white border-red-400 animate-pulse'
-                : 'bg-black/80 text-slate-300 border-slate-700 hover:text-white'
-            }`}
-          >
-            <Compass className="w-3.5 h-3.5" />
-            <span>{isRoadMode ? 'ROAD MODE ON' : 'ROAD MODE'}</span>
-          </button>
-        </div>
-
-        {/* Right: Quick Accessibility Toggles */}
-        <div className="flex items-center space-x-2 pointer-events-auto">
-          {/* Flashlight Button */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onToggleTorch) onToggleTorch();
-            }}
-            aria-label={isTorchOn ? 'Turn off flashlight' : 'Turn on flashlight'}
-            className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all active:scale-90 ${
-              isTorchOn
-                ? 'bg-yellow-400 text-black border-yellow-300 shadow-[0_0_15px_rgba(250,204,21,0.6)]'
-                : 'bg-black/80 text-slate-400 border-slate-700 hover:text-white'
-            }`}
-          >
-            {isTorchOn ? <Flashlight className="w-4 h-4" /> : <FlashlightOff className="w-4 h-4" />}
-          </button>
-
-          {/* Eco Battery Saver Mode Button */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onToggleEcoMode) onToggleEcoMode();
-              triggerVisualFeedback(isEcoMode ? 'High Performance Mode' : 'Eco Battery Saver Mode');
-            }}
-            aria-label={isEcoMode ? 'Disable eco battery saver' : 'Enable eco battery saver'}
-            className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all active:scale-90 ${
-              isEcoMode
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                : 'bg-black/80 text-slate-400 border-slate-700'
-            }`}
-            title="Eco Energy Mode"
-          >
-            <Leaf className="w-4 h-4" />
-          </button>
-
-          {/* Eco Screen Curtain Button */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onToggleCurtain) onToggleCurtain();
-            }}
-            aria-label="Toggle Eco screen curtain for OLED battery saving"
-            className="w-9 h-9 rounded-full bg-black/80 border border-slate-700 text-emerald-400 hover:text-emerald-300 flex items-center justify-center transition-all active:scale-90"
-            title="Screen Curtain (Saves 60% battery)"
-          >
-            {isCurtainActive ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          </button>
-
-          {/* Spatial Audio Radar Mute Button */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onToggleRadar) onToggleRadar();
-            }}
-            aria-label={isRadarMuted ? 'Unmute 3D audio radar' : 'Mute 3D audio radar'}
-            className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all active:scale-90 ${
-              isRadarMuted
-                ? 'bg-red-500/20 text-red-400 border-red-500/40'
-                : 'bg-black/80 text-cyan-400 border-slate-700'
-            }`}
-          >
-            {isRadarMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          </button>
-        </div>
-      </div>
-
-      {/* 5. Approaching Vehicle Urgent Warning Alert (Road Mode) */}
-      {approachingVehicle && !isCurtainActive && (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="absolute top-16 inset-x-4 sm:inset-x-8 z-30 bg-red-600 text-white p-3.5 rounded-2xl shadow-[0_0_50px_rgba(239,68,68,0.9)] border-2 border-yellow-300 flex items-center justify-between animate-bounce pointer-events-none"
-        >
-          <div className="flex items-center space-x-3">
-            <AlertTriangle className="w-8 h-8 shrink-0 text-yellow-300 animate-pulse" />
-            <div>
-              <p className="text-sm sm:text-base font-black uppercase tracking-wider text-yellow-300">
-                WARNING: FAST VEHICLE APPROACHING!
-              </p>
-              <p className="text-xs sm:text-sm font-semibold">
-                {approachingVehicle.class.toUpperCase()} at {approachingVehicle.clockDirection} ({approachingVehicle.cardinalDirection}) ~{approachingVehicle.estimatedMeters}m! Step back on curb!
-              </p>
-            </div>
-          </div>
-          <span className="text-xs font-black uppercase bg-black/70 px-2.5 py-1.5 rounded-lg border border-red-400">
-            DANGER
-          </span>
-        </div>
-      )}
-
-      {/* 5b. Immediate Danger Collision Warning (< 1.2m) */}
-      {dangerObstacle && !approachingVehicle && !isCurtainActive && (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="absolute top-16 inset-x-4 sm:inset-x-8 z-30 bg-red-600/95 text-white p-3 rounded-2xl shadow-[0_0_40px_rgba(239,68,68,0.8)] border-2 border-red-300 flex items-center justify-between pointer-events-none"
-        >
-          <div className="flex items-center space-x-3">
-            <ShieldAlert className="w-7 h-7 sm:w-8 sm:h-8 shrink-0 text-yellow-300" />
-            <div>
-              <p className="text-sm sm:text-base font-black uppercase tracking-wider text-yellow-300">
-                STOP: OBSTACLE IMMEDIATELY AHEAD!
-              </p>
-              <p className="text-xs sm:text-sm font-semibold">
-                {dangerObstacle.matchedPersonName || dangerObstacle.class} at {dangerObstacle.clockDirection} ({dangerObstacle.cardinalDirection}) &lt; 1.2m!
-              </p>
-            </div>
-          </div>
-          <span className="text-xs font-black uppercase bg-black/60 px-2.5 py-1 rounded-lg border border-red-400">
-            &lt; 1.2M
-          </span>
-        </div>
-      )}
-
-      {/* 6. Visual Gesture Feedback Toast */}
+      {/* 4. Visual Gesture Feedback Toast */}
       {gestureFeedbackText && (
         <div className="absolute top-1/2 transform -translate-y-1/2 z-30 bg-black/90 backdrop-blur-md px-5 py-2.5 rounded-2xl border border-yellow-400/50 text-yellow-300 text-sm font-extrabold shadow-2xl flex items-center space-x-2 pointer-events-none animate-fade-in">
           <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" />
           <span>{gestureFeedbackText}</span>
         </div>
       )}
-
-      {/* 7. Bottom Tactile Gesture Instructions */}
-      <div className="absolute bottom-2 inset-x-4 z-20 flex items-center justify-between text-[11px] text-slate-400 font-medium pointer-events-none">
-        <span className="bg-black/70 px-2.5 py-1 rounded-lg border border-slate-800">
-          Tap: Path Check • 2x: Describe • Hold: Voice Ask
-        </span>
-        <span className="bg-black/70 px-2.5 py-1 rounded-lg border border-slate-800">
-          Compass: {userHeading}° {userCardinal} • Road Sentinel Ready
-        </span>
-      </div>
     </div>
   );
 };

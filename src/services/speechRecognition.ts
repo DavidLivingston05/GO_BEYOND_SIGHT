@@ -14,8 +14,12 @@ export type VoiceCommandHandler = (
     | 'read_text'
     | 'toggle_torch'
     | 'toggle_curtain'
+    | 'flip_camera'
     | 'check_path'
     | 'toggle_road_mode'
+    | 'set_home_mode'
+    | 'set_road_mode'
+    | 'cancel_target'
     | 'check_traffic_light'
     | 'which_direction_door'
     | 'which_direction_person'
@@ -33,7 +37,6 @@ interface IWindowSpeech extends Window {
 class SpeechRecognitionService {
   private recognition: any = null;
   private isListeningRef = false;
-  private isMutedForAppVoice = false;
   private manuallyStopped = false;
   private restartTimeout: any = null;
   private commandHandler: VoiceCommandHandler | null = null;
@@ -42,13 +45,6 @@ class SpeechRecognitionService {
 
   constructor() {
     this.initRecognition();
-    // Hook into speech manager so we mute transcript processing whenever app speaks
-    speechManager.onSpeakingChange((speaking) => {
-      this.isMutedForAppVoice = speaking;
-      if (speaking) {
-        // App is talking - ignore mic feedback
-      }
-    });
   }
 
   private initRecognition(): void {
@@ -74,13 +70,14 @@ class SpeechRecognitionService {
         this.notifyStatus(true);
       };
 
-      this.recognition.onresult = (event: any) => {
-        // CRITICAL ANTI-INTERRUPTION CHECK:
-        // If app is currently speaking or speech synthesis is active, discard hearing our own voice
-        if (this.isMutedForAppVoice || speechManager.getIsSpeaking()) {
-          return;
+      this.recognition.onspeechstart = () => {
+        // As soon as the user starts speaking, cut off any ongoing assistant speech immediately
+        if (speechManager.getIsSpeaking()) {
+          speechManager.cancelAll();
         }
+      };
 
+      this.recognition.onresult = (event: any) => {
         let interimTranscript = '';
         let finalTranscript = '';
 
@@ -95,6 +92,12 @@ class SpeechRecognitionService {
         }
 
         const displayTranscript = finalTranscript || interimTranscript;
+
+        // If user spoke anything, immediately stop assistant speech so they are never talked over
+        if (displayTranscript.trim() && speechManager.getIsSpeaking()) {
+          speechManager.cancelAll();
+        }
+
         if (displayTranscript && this.onTranscriptUpdate) {
           this.onTranscriptUpdate(displayTranscript.trim(), Boolean(finalTranscript));
         }
@@ -262,6 +265,20 @@ class SpeechRecognitionService {
       return;
     }
 
+    // 2c2. Flip / Switch Camera
+    if (
+      clean.includes('flip camera') ||
+      clean.includes('switch camera') ||
+      clean.includes('change camera') ||
+      clean.includes('front camera') ||
+      clean.includes('rear camera') ||
+      clean.includes('back camera') ||
+      clean.includes('webcam')
+    ) {
+      this.commandHandler('flip_camera', transcript);
+      return;
+    }
+
     // 2d. Check walking path & step count
     if (
       clean.includes('is path clear') ||
@@ -275,16 +292,53 @@ class SpeechRecognitionService {
       return;
     }
 
-    // 2e. Road / Street Safety Sentinel Mode
+    // 2e. Standard / Home Mode (Calm Indoor Navigation)
+    if (
+      clean.includes('standard') ||
+      clean.includes('home mode') ||
+      clean.includes('in home') ||
+      clean.includes('at home') ||
+      clean.includes('indoor') ||
+      clean.includes('inside') ||
+      clean.includes('quiet mode') ||
+      clean.includes('relax mode') ||
+      clean.includes('stop alarm') ||
+      clean.includes('stop shouting') ||
+      clean.includes('irritating')
+    ) {
+      this.commandHandler('set_home_mode', transcript);
+      return;
+    }
+
+    // 2f. Road / Street Safety Sentinel Mode
     if (
       clean.includes('road mode') ||
       clean.includes('street mode') ||
       clean.includes('traffic mode') ||
+      clean.includes('outdoor mode') ||
+      clean.includes('outside') ||
       clean.includes('near the road') ||
       clean.includes('road safety') ||
       clean.includes('traffic alert')
     ) {
-      this.commandHandler('toggle_road_mode', transcript);
+      this.commandHandler('set_road_mode', transcript);
+      return;
+    }
+
+    // 2g. Cancel active target seeker, homing beacon or speech
+    if (
+      clean.includes('cancel') ||
+      clean.includes('stop') ||
+      clean.includes('quiet') ||
+      clean.includes('shut up') ||
+      clean.includes('silence') ||
+      clean.includes('stop talking') ||
+      clean.includes('stop finding') ||
+      clean.includes('stop beacon') ||
+      clean.includes('stop seeking') ||
+      clean.includes('stop searching')
+    ) {
+      this.commandHandler('cancel_target', transcript);
       return;
     }
 
@@ -376,15 +430,21 @@ class SpeechRecognitionService {
       return;
     }
 
-    // 6. Describe room / What do you see?
+    // 6. Describe room / Scan surroundings / Where am I?
     if (
-      clean.includes('describe the room') ||
+      clean.includes('describe') ||
+      clean.includes('scan room') ||
+      clean.includes('scan the room') ||
       clean.includes('what do you see') ||
       clean.includes('describe everything') ||
       clean.includes('tell me what is around me') ||
+      clean.includes('what is around me') ||
+      clean.includes('whats around me') ||
+      clean.includes('where am i') ||
+      clean.includes('where am i located') ||
+      clean.includes('tell me where i am') ||
       clean.includes('describe environment') ||
-      clean.includes('what is in front of me') ||
-      clean.includes('is the path clear')
+      clean.includes('what is in front of me')
     ) {
       this.commandHandler('describe_room', transcript);
       return;
@@ -402,8 +462,54 @@ class SpeechRecognitionService {
       return;
     }
 
-    // 8. Specific object query: "Where is the chair / table / bottle / phone?"
-    const whereIsRegex = /(?:where\s+is\s+(?:the\s+)?|find\s+(?:the\s+)?|look\s+for\s+(?:the\s+)?)([a-zA-Z\s]+)/i;
+    // 8. High-Frequency Direct Object Queries
+    // "Where is the chair", "Find chair", "Chair", "Where can I sit"
+    if (
+      clean.includes('chair') ||
+      clean.includes('where can i sit') ||
+      clean.includes('seat') ||
+      clean.includes('armchair') ||
+      clean.includes('couch') ||
+      clean.includes('sofa')
+    ) {
+      this.commandHandler('find_object', transcript, { targetObject: 'chair' });
+      return;
+    }
+
+    // "Where is the bottle / cup / water / mug"
+    if (
+      clean.includes('bottle') ||
+      clean.includes('cup') ||
+      clean.includes('glass') ||
+      clean.includes('mug') ||
+      clean.includes('water')
+    ) {
+      this.commandHandler('find_object', transcript, { targetObject: 'bottle' });
+      return;
+    }
+
+    // "Where is my phone / mobile"
+    if (
+      clean.includes('phone') ||
+      clean.includes('mobile') ||
+      clean.includes('cellphone') ||
+      clean.includes('cell phone')
+    ) {
+      this.commandHandler('find_object', transcript, { targetObject: 'phone' });
+      return;
+    }
+
+    // "Where is the table / desk"
+    if (
+      clean.includes('table') ||
+      clean.includes('desk')
+    ) {
+      this.commandHandler('find_object', transcript, { targetObject: 'table' });
+      return;
+    }
+
+    // 8b. General object query: "Where is the [item]?"
+    const whereIsRegex = /(?:where\s+is\s+(?:the\s+)?|where\s+are\s+(?:the\s+)?|find\s+(?:the\s+)?|look\s+for\s+(?:the\s+)?|navigate\s+to\s+(?:the\s+)?|take\s+me\s+to\s+(?:the\s+)?)([a-zA-Z\s]+)/i;
     const whereMatch = clean.match(whereIsRegex);
     if (whereMatch && whereMatch[1]) {
       const target = whereMatch[1].trim();

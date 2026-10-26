@@ -153,6 +153,7 @@ class ObjectDetectorService {
 
         // 4. Person Stance & Facing Direction Estimation
         let personFacing: 'facing you' | 'facing away' | 'side profile' | undefined = undefined;
+        let isSelfUser = false;
         if (pred.class === 'person') {
           const aspectRatio = width / height;
           if (aspectRatio > 0.5) {
@@ -160,6 +161,10 @@ class ObjectDetectorService {
           } else {
             // Heuristic: Front-facing individuals tend to have higher contrast variance in the upper 30% (face/torso)
             personFacing = 'facing you';
+          }
+          // If a person is centered in frame and takes up a large portion (> 35% height), this is typically the user on front camera / laptop webcam
+          if (Math.abs(normalizedX) < 0.45 && heightRatio > 0.35) {
+            isSelfUser = true;
           }
         }
 
@@ -193,6 +198,7 @@ class ObjectDetectorService {
           relativeBearingDegrees: relativeAngleDeg,
           compassHeading: Math.round(objectCompassHeading),
           personFacing,
+          isSelfUser,
           isVehicle,
           isApproachingFast,
           approachSpeedRatio,
