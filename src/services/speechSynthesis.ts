@@ -11,6 +11,8 @@ class SpeechManager {
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private queue: SpeechQueueItem[] = [];
   private speakingCallbacks: Set<SpeakingCallback> = new Set();
+  private keepAliveTimer: any = null;
+  private speechTimeoutTimer: any = null;
 
   private lastBackgroundSpokenTime = 0;
   private lastSpokenText = '';
@@ -233,13 +235,49 @@ class SpeechManager {
       utterance.pitch = this.pitch;
       utterance.volume = this.volume;
 
+      const clearWatchdogs = () => {
+        if (this.keepAliveTimer) {
+          clearInterval(this.keepAliveTimer);
+          this.keepAliveTimer = null;
+        }
+        if (this.speechTimeoutTimer) {
+          clearTimeout(this.speechTimeoutTimer);
+          this.speechTimeoutTimer = null;
+        }
+      };
+
       utterance.onstart = () => {
         this.isSpeaking = true;
         this.currentUtterance = utterance;
         this.notifySpeaking(true, item.text);
+
+        clearWatchdogs();
+
+        // Chromium Keep-Alive: Chrome pauses long SpeechSynthesis utterances after ~14s
+        this.keepAliveTimer = setInterval(() => {
+          if (this.synth && this.isSpeaking) {
+            try {
+              this.synth.pause();
+              this.synth.resume();
+            } catch {
+              // Ignore
+            }
+          }
+        }, 10000);
+
+        // Fail-safe watchdog: force cleanup if browser gets stuck without onend
+        const maxDurationMs = Math.max(6000, Math.min(30000, item.text.length * 150));
+        this.speechTimeoutTimer = setTimeout(() => {
+          if (this.isSpeaking && this.currentUtterance === utterance) {
+            clearWatchdogs();
+            this.cancelCurrent();
+            setTimeout(() => this.processQueue(), 100);
+          }
+        }, maxDurationMs);
       };
 
       utterance.onend = () => {
+        clearWatchdogs();
         this.isSpeaking = false;
         this.currentUtterance = null;
         this.lastSpokenText = item.text;
@@ -252,6 +290,7 @@ class SpeechManager {
       };
 
       utterance.onerror = (e) => {
+        clearWatchdogs();
         // If canceled intentionally, ignore
         this.isSpeaking = false;
         this.currentUtterance = null;
@@ -264,12 +303,28 @@ class SpeechManager {
       this.currentUtterance = utterance;
       this.synth.speak(utterance);
     } catch {
+      if (this.keepAliveTimer) {
+        clearInterval(this.keepAliveTimer);
+        this.keepAliveTimer = null;
+      }
+      if (this.speechTimeoutTimer) {
+        clearTimeout(this.speechTimeoutTimer);
+        this.speechTimeoutTimer = null;
+      }
       this.isSpeaking = false;
       this.notifySpeaking(false, '');
     }
   }
 
   public cancelCurrent(): void {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
+    if (this.speechTimeoutTimer) {
+      clearTimeout(this.speechTimeoutTimer);
+      this.speechTimeoutTimer = null;
+    }
     if (this.synth) {
       try {
         this.synth.cancel();

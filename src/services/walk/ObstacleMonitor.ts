@@ -131,9 +131,9 @@ export class ObstacleMonitor {
       return;
     }
 
-    // Stage 3: Distance <= 2 steps (Spoken warning with hysteresis: announce once, then only if distance changes by > 1 step)
-    if (steps <= 2) {
-      const distanceChangedByMoreThanOneStep = prev ? Math.abs(prev.lastSteps - steps) >= 1.5 : true;
+    // Stage 3: Distance <= 1 step or approaching fast (Spoken warning with hysteresis)
+    if (steps <= 1 || item.isApproachingFast) {
+      const distanceChangedByMoreThanOneStep = prev ? Math.abs(prev.lastSteps - steps) >= 1.0 : true;
       const cooldownPassed = prev ? now - prev.lastAnnounceTime > 4500 : true;
 
       if (!prev || (distanceChangedByMoreThanOneStep && cooldownPassed)) {

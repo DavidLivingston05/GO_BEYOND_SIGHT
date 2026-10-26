@@ -592,10 +592,6 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
   // Pointer and Touch Handling for Blind Users & Desktop Webcams
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (isCurtainActive) {
-      if (onToggleCurtain) onToggleCurtain();
-      return;
-    }
     isLongPressActiveRef.current = false;
     touchTimerRef.current = window.setTimeout(() => {
       isLongPressActiveRef.current = true;
@@ -703,7 +699,7 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
         <div
           role="status"
           aria-live="polite"
-          className="absolute inset-0 z-40 bg-black flex flex-col items-center justify-center p-6 text-center text-slate-500 pointer-events-auto"
+          className="absolute inset-0 z-40 bg-black flex flex-col items-center justify-center p-6 text-center text-slate-500 pointer-events-none"
         >
           <div className="w-14 h-14 rounded-full bg-slate-950 border border-slate-800 flex items-center justify-center mb-4 text-emerald-500">
             <Leaf className="w-7 h-7" />
@@ -713,7 +709,7 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
             Display is off to conserve power. Background AI navigation is actively running.
           </p>
           <p className="text-xs text-yellow-400 mt-4 font-mono font-bold">
-            Tap anywhere to reveal screen
+            1 Tap: Check Path • 2 Taps: Describe Room • 3 Taps: Reveal Screen
           </p>
         </div>
       )}

@@ -65,9 +65,31 @@ class SpeechRecognitionService {
   private onTranscriptUpdate: ((transcript: string, isFinal: boolean) => void) | null = null;
   private onStatusChange: ((isListening: boolean) => void) | null = null;
   private offlineSpeechWarningSpoken = false;
+  private lastSpeakingEndTime = 0;
 
   constructor() {
     this.initRecognition();
+    if (typeof window !== 'undefined') {
+      speechManager.onSpeakingChange((speaking) => {
+        if (!speaking) {
+          this.lastSpeakingEndTime = Date.now();
+        }
+      });
+    }
+  }
+
+  private isExplicitBargeIn(text: string): boolean {
+    const clean = text.toLowerCase().trim();
+    return (
+      clean === 'stop' ||
+      clean.startsWith('stop ') ||
+      clean.endsWith(' stop') ||
+      clean.includes('cancel') ||
+      clean.includes('quiet') ||
+      clean.includes('silence') ||
+      clean.includes('hey vision') ||
+      clean.includes('beyond sight')
+    );
   }
 
   private initRecognition(): void {
@@ -95,10 +117,9 @@ class SpeechRecognitionService {
       };
 
       this.recognition.onspeechstart = () => {
-        // As soon as the user starts speaking, cut off any ongoing assistant speech immediately
-        if (speechManager.getIsSpeaking()) {
-          speechManager.cancelAll();
-        }
+        // Acoustic self-echo protection:
+        // Do not interrupt the device's own speech playback on ambient speaker sound.
+        // Explicit word interruptions (e.g. "Stop", "Quiet") are handled in onresult.
       };
 
       this.recognition.onresult = (event: any) => {
@@ -115,15 +136,24 @@ class SpeechRecognitionService {
           }
         }
 
-        const displayTranscript = finalTranscript || interimTranscript;
+        const displayTranscript = (finalTranscript || interimTranscript).trim();
+        const now = Date.now();
+        const isSpeaking = speechManager.getIsSpeaking();
+        const inEchoBuffer = now - this.lastSpeakingEndTime < 350;
 
-        // If user spoke anything, immediately stop assistant speech so they are never talked over
-        if (displayTranscript.trim() && speechManager.getIsSpeaking()) {
-          speechManager.cancelAll();
+        // If the app is currently speaking or just finished within 350ms:
+        if (isSpeaking || inEchoBuffer) {
+          if (displayTranscript && this.isExplicitBargeIn(displayTranscript)) {
+            // User intentionally spoke an explicit interrupt command ("stop", "cancel", "quiet", "hey vision")
+            speechManager.cancelAll();
+          } else {
+            // Discard self-echo from speaker audio so the assistant never interrupts itself or self-triggers
+            return;
+          }
         }
 
         if (displayTranscript && this.onTranscriptUpdate) {
-          this.onTranscriptUpdate(displayTranscript.trim(), Boolean(finalTranscript));
+          this.onTranscriptUpdate(displayTranscript, Boolean(finalTranscript));
         }
 
         if (finalTranscript) {

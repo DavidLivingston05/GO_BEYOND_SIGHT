@@ -52,6 +52,8 @@ export function App() {
 
   // Compass Heading & Direction Orientation
   const [userHeading, setUserHeading] = useState(0); // 0 - 360 degrees
+  const userHeadingRef = useRef(0);
+  const lastRenderedHeadingRef = useRef(0);
 
   // Environment Navigation Mode: Standard Home Mode vs Road Mode vs Smart Walk Mode
   const [navigationMode, setNavigationMode] = useState<NavigationMode>('home');
@@ -109,8 +111,14 @@ export function App() {
         heading = (360 - e.alpha) % 360;
       }
       const rounded = Math.round(heading);
-      setUserHeading(rounded);
+      userHeadingRef.current = rounded;
       guidanceEngine.updateHeading(rounded);
+
+      // Deadband smoothing filter: prevent 60fps micro-jitter from re-rendering React components
+      if (Math.abs(rounded - lastRenderedHeadingRef.current) >= 2) {
+        lastRenderedHeadingRef.current = rounded;
+        setUserHeading(rounded);
+      }
     };
 
     if (typeof window !== 'undefined' && 'DeviceOrientationEvent' in window) {
@@ -298,8 +306,9 @@ export function App() {
 
   // Auto-request camera on load so user sees camera immediately
   useEffect(() => {
-    startCamera();
-  }, [startCamera]);
+    void startCamera();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
@@ -1083,12 +1092,13 @@ export function App() {
           const height = video.videoHeight || 480;
 
           // Local COCO-SSD detection with live user compass heading
+          const currentHeading = userHeadingRef.current;
           const detected = await objectDetectorService.detect(
             video,
             width,
             height,
             settings.minConfidence,
-            userHeading
+            currentHeading
           );
 
           // Enhance detections with enrolled person profiles
@@ -1110,7 +1120,7 @@ export function App() {
           setDetections(detected);
 
           // Structural Door & Portal Heuristic
-          const doorResult = objectDetectorService.detectDoorHeuristic(video, width, height, userHeading);
+          const doorResult = objectDetectorService.detectDoorHeuristic(video, width, height, currentHeading);
           setDoorGuidance(doorResult);
 
           // Crosswalk / Zebra Crossing Heuristic
@@ -1216,8 +1226,11 @@ export function App() {
           if (settings.spatialRadarEnabled && validDetections.length > 0 && !activeTargetItem && !fastVehicle) {
             const sortedByDistance = [...validDetections].sort((a, b) => a.estimatedMeters - b.estimatedMeters);
             const closest = sortedByDistance[0];
-            // Subtle, non-intrusive radar ping
-            audioEngine.playSpatialRadarPing(closest.zone, closest.proximityTier);
+            // Auditory ducking: Suppress non-danger pings while speech synthesis is speaking
+            // so blind users can hear speech output with 100% clarity.
+            if (!speechManager.getIsSpeaking() || closest.proximityTier === 'danger') {
+              audioEngine.playSpatialRadarPing(closest.zone, closest.proximityTier);
+            }
           }
         } catch {
           // Frame skip
@@ -1253,7 +1266,6 @@ export function App() {
     activeTargetItem,
     isEcoMode,
     isCurtainActive,
-    userHeading,
     navigationMode,
     cameraFacing,
     walkGuidanceState.isPocketed,
