@@ -2,7 +2,7 @@ export type SpatialZone = 'left' | 'center' | 'right';
 export type ClockDirection = "10 o'clock" | "12 o'clock" | "2 o'clock" | "9 o'clock" | "11 o'clock" | "1 o'clock" | "3 o'clock";
 export type ProximityTier = 'danger' | 'close' | 'far';
 export type CardinalDirection = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
-export type NavigationMode = 'home' | 'road';
+export type NavigationMode = 'home' | 'road' | 'walk';
 
 export interface BoundingBox {
   x: number;
@@ -87,4 +87,102 @@ export interface VisionSettings {
   autoGuidance: boolean;
   defaultMode?: NavigationMode;
   ignoreSelfInFrontCamera?: boolean;
+  distanceUnit?: 'steps' | 'meters' | 'feet';
+  language?: SupportedLanguage;
 }
+
+export type SupportedLanguage = 'en' | 'hi' | 'ta' | 'es' | 'ar';
+
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+export interface GeocodedPlace {
+  name: string;
+  displayName: string;
+  lat: number;
+  lng: number;
+  distanceMeters?: number;
+}
+
+export interface RouteManeuver {
+  type: string; // 'turn', 'depart', 'arrive', 'fork', 'roundabout', etc.
+  modifier?: string; // 'left', 'right', 'slight left', 'slight right', 'straight', 'uturn'
+  location: LatLng;
+  bearing_after?: number;
+  bearing_before?: number;
+}
+
+export interface RouteStep {
+  instruction: string;
+  distanceMeters: number;
+  durationSeconds: number;
+  maneuver: RouteManeuver;
+  polyline: LatLng[];
+  name?: string;
+}
+
+export interface WalkRoute {
+  destinationName: string;
+  destinationCoords: LatLng;
+  totalDistanceMeters: number;
+  totalDurationSeconds: number;
+  steps: RouteStep[];
+  fullPolyline: LatLng[];
+}
+
+export type WalkStatus = 'idle' | 'confirming_destination' | 'walking' | 'arrived' | 'paused';
+
+export interface WalkGuidanceState {
+  status: WalkStatus;
+  route: WalkRoute | null;
+  currentStepIndex: number;
+  distanceToNextTurnMeters: number;
+  stepsToNextTurn: number;
+  nextManeuverModifier?: string;
+  nextStreetName?: string;
+  clockDirection: ClockDirection;
+  isOffRoute: boolean;
+  offRouteSide?: 'left' | 'right';
+  offRouteDeviationDeg: number;
+  isPocketed: boolean;
+  gpsAccuracyMeters: number;
+  destinationChoices?: GeocodedPlace[];
+  pendingDestinationQuery?: string;
+}
+
+export interface EmergencyContact {
+  name: string;
+  phone: string;
+}
+
+export type ConnectivityState = 'online' | 'offline' | 'degraded';
+
+export interface NetworkQuality {
+  state: ConnectivityState;
+  isOnline: boolean;
+  isDegraded: boolean;
+  latencyMs: number;
+  consecutiveFailures: number;
+  consecutiveSuccesses: number;
+  lastChecked: number;
+}
+
+export interface SavedLocation {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  timestamp: number;
+}
+
+export interface OfflineQueueItem {
+  id: string;
+  type: 'read_text' | 'describe_room' | 'route' | 'emergency';
+  data?: any;
+  createdAt: number;
+}
+
+export type FeatureGateDecision = 'cloud' | 'edge' | 'unavailable';
+

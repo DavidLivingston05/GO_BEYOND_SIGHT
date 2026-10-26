@@ -1,4 +1,6 @@
 // Gemini Multimodal Vision API integration for Deep Scene, Door & Text Analysis
+import { featureGate } from './offline/FeatureGate';
+
 const GEMINI_API_KEY_STORAGE = 'beyond_sight_gemini_api_key';
 const GEMINI_MODEL_STORAGE = 'beyond_sight_gemini_model';
 
@@ -84,6 +86,10 @@ class GeminiVisionService {
   ): Promise<string> {
     if (!this.hasApiKey()) {
       throw new Error('No Gemini API key configured.');
+    }
+
+    if (featureGate.evaluate('read_text') === 'unavailable') {
+      throw new Error('That needs internet. I will do it when you are back online.');
     }
 
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this.apiKey}`;

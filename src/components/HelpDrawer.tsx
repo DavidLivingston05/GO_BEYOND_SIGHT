@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Volume2, Mic, HelpCircle, Navigation, Users, Eye, Compass, Home } from 'lucide-react';
+import { X, Volume2, Mic, HelpCircle, Navigation, Users, Eye, Compass, Home, WifiOff } from 'lucide-react';
 import { speechManager } from '../services/speechSynthesis';
 
 interface HelpDrawerProps {
@@ -12,7 +12,7 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
 
   const handleSpeakCommands = () => {
     speechManager.speakReply(
-      'Here are key voice commands you can say anytime: Hey Vision, start camera. Where is the door? Where is the chair? Who is in front of me? Remember this person as John. Describe the room. Or, stop camera.'
+      'Key voice commands: Walk mode, or Take me to a place. What do the vibrations mean? Help me or Emergency. Where is the door? Who is in front of me? Or stop walking.'
     );
   };
 
@@ -36,6 +36,36 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
         { phrase: '"Turn on Flashlight" / "Torch on"', desc: 'Illuminates dark areas so camera can track' },
         { phrase: '"Screen Curtain on" / "Eco mode"', desc: 'Powers off screen pixels to conserve battery' },
         { phrase: '"Start Camera" / "Stop Camera"', desc: 'Controls real-time video viewfinder' },
+      ],
+    },
+    {
+      title: 'Smart Walk Mode (Hands-Free Walking)',
+      icon: <Navigation className="w-5 h-5 text-cyan-400" />,
+      items: [
+        { phrase: '"Walk mode" / "Start walking"', desc: 'Activates hands-free turn-by-turn walking guidance with obstacle sentinel' },
+        { phrase: '"Take me to [Destination]"', desc: 'Geocodes destination with OpenStreetMap & OSRM foot walking' },
+        { phrase: '"Stop walking" / "End route"', desc: 'Ends active walking route and silences beacons' },
+        { phrase: '"What do the vibrations mean?"', desc: 'Explains tactile pulses: 1=straight, 2=left, 3=right, long=arrived' },
+        { phrase: '"Simulate walk" / "Test walk mode"', desc: 'Runs indoor virtual walking test with obstacles and turns' },
+      ],
+    },
+    {
+      title: 'Automatic Offline Mode & PWA',
+      icon: <WifiOff className="w-5 h-5 text-purple-400" />,
+      items: [
+        { phrase: 'Automatic Switch', desc: 'No buttons needed. When internet drops, switches to on-device vision, compass, and haptics' },
+        { phrase: '"Where am I?"', desc: 'Speaks compass heading, distance to saved places, and last known address freshness' },
+        { phrase: '"Install app"', desc: 'Adds Beyond Sight directly to your home screen for instant offline launch' },
+        { phrase: '"Simulate offline" / "Simulate online"', desc: 'Tests connectivity transitions, earcons, and feature gating' },
+      ],
+    },
+    {
+      title: 'Emergency SOS & Privacy',
+      icon: <HelpCircle className="w-5 h-5 text-red-400" />,
+      items: [
+        { phrase: '"Help me" / "Emergency"', desc: 'Speaks current reverse-geocoded address and opens live WhatsApp/SMS link' },
+        { phrase: '"Set emergency contact [number]"', desc: 'Saves trusted phone number locally on device' },
+        { phrase: '"Forget my data"', desc: 'Erases all saved contacts, locations, and person profiles' },
       ],
     },
     {

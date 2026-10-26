@@ -4,7 +4,7 @@ import {
   Leaf,
   Sparkles,
 } from 'lucide-react';
-import type { DetectedObject, DoorGuidanceInfo, NavigationMode } from '../types';
+import type { DetectedObject, DoorGuidanceInfo, NavigationMode, WalkGuidanceState } from '../types';
 import { degreesToCardinal } from '../services/objectDetector';
 
 interface CameraRadarCanvasProps {
@@ -20,6 +20,8 @@ interface CameraRadarCanvasProps {
   navigationMode?: NavigationMode;
   isRoadMode?: boolean;
   crosswalkDetected?: boolean;
+  walkGuidanceState?: WalkGuidanceState | null;
+  isOffline?: boolean;
   onSingleTap?: () => void;
   onDoubleTap?: () => void;
   onLongPressStart?: () => void;
@@ -39,6 +41,8 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
   navigationMode = 'home',
   isRoadMode = false,
   crosswalkDetected = false,
+  walkGuidanceState,
+  isOffline = false,
   onSingleTap,
   onDoubleTap,
   onLongPressStart,
@@ -99,7 +103,11 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
         const offsetY = (displayH - renderedH) / 2;
 
         // 2. Camera Viewfinder Frame Corners [   ]
-        ctx.strokeStyle = isRoadMode ? 'rgba(239, 68, 68, 0.45)' : 'rgba(255, 255, 255, 0.35)';
+        ctx.strokeStyle = isRoadMode
+          ? 'rgba(239, 68, 68, 0.45)'
+          : navigationMode === 'walk'
+          ? 'rgba(6, 182, 212, 0.65)'
+          : 'rgba(255, 255, 255, 0.35)';
         ctx.lineWidth = 2;
         const margin = 16;
         const cornerLen = 24;
@@ -147,6 +155,21 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
 
         ctx.fillStyle = '#facc15';
         ctx.fillText(`🧭 COMPASS: ${userHeading}° ${userCardinal}`, displayW / 2, ribbonY + 3);
+
+        if (isOffline) {
+          ctx.font = 'bold 9px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(displayW / 2 - 80, ribbonY + 18, 160, 20, 10);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText('📡 OFFLINE MODE (EDGE AI)', displayW / 2, ribbonY + 31);
+        }
 
         // 4. Draw Camera Autofocus Boxes on Detected People, Vehicles & Objects
         detections.forEach((item) => {
@@ -340,6 +363,89 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
           ctx.fillText('🦓 ZEBRA CROSSWALK DETECTED AHEAD', displayW / 2, displayH - 82);
         }
 
+        // 6b. Smart Walk Mode HUD & Corridor Guidance
+        if (navigationMode === 'walk' && walkGuidanceState) {
+          // Corridor guide (center 40% vertical dashed guides)
+          ctx.strokeStyle = 'rgba(6, 182, 212, 0.25)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 6]);
+          ctx.beginPath();
+          ctx.moveTo(displayW * 0.3, 40);
+          ctx.lineTo(displayW * 0.3, displayH - 60);
+          ctx.moveTo(displayW * 0.7, 40);
+          ctx.lineTo(displayW * 0.7, displayH - 60);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Walk Guidance Banner
+          const isWalking = walkGuidanceState.status === 'walking';
+          const isArrived = walkGuidanceState.status === 'arrived';
+          const isConfirming = walkGuidanceState.status === 'confirming_destination';
+
+          let walkBannerText = '';
+          if (isConfirming) {
+            walkBannerText = `📍 CONFIRM: "${walkGuidanceState.pendingDestinationQuery || 'Destination'}"? Say "Yes" or "No"`;
+          } else if (isArrived) {
+            walkBannerText = `🎯 ARRIVED: ${walkGuidanceState.route?.destinationName || 'Destination'} reached!`;
+          } else if (isWalking) {
+            const turnMod = walkGuidanceState.nextManeuverModifier || 'straight';
+            const street = walkGuidanceState.nextStreetName ? ` on ${walkGuidanceState.nextStreetName}` : '';
+            walkBannerText = `🚶 IN ${walkGuidanceState.stepsToNextTurn} STEPS, ${turnMod.toUpperCase()}${street.toUpperCase()}`;
+          }
+
+          if (walkBannerText) {
+            const bWidth = Math.min(displayW - 24, 440);
+            const bHeight = 32;
+            ctx.fillStyle = isArrived
+              ? 'rgba(6, 78, 59, 0.95)'
+              : walkGuidanceState.isOffRoute
+              ? 'rgba(185, 28, 28, 0.95)'
+              : 'rgba(15, 23, 42, 0.92)';
+            ctx.strokeStyle = isArrived ? '#10b981' : walkGuidanceState.isOffRoute ? '#ef4444' : '#06b6d4';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.roundRect(displayW / 2 - bWidth / 2, displayH - 100, bWidth, bHeight, 10);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.font = 'bold 11px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = isArrived ? '#6ee7b7' : walkGuidanceState.isOffRoute ? '#fca5a5' : '#67e8f9';
+            ctx.fillText(walkBannerText, displayW / 2, displayH - 79);
+          }
+
+          // Off-route warning badge if drifting
+          if (walkGuidanceState.offRouteSide) {
+            const driftText = `⚠️ DRIFTING ${walkGuidanceState.offRouteSide.toUpperCase()} (${Math.abs(walkGuidanceState.offRouteDeviationDeg)}°) • MOVE ${walkGuidanceState.offRouteSide === 'left' ? 'RIGHT' : 'LEFT'}`;
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.95)';
+            ctx.strokeStyle = '#f87171';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(displayW / 2 - 130, displayH - 134, 260, 24, 6);
+            ctx.fill();
+            ctx.stroke();
+            ctx.font = 'bold 10px system-ui, monospace';
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.fillText(driftText, displayW / 2, displayH - 118);
+          }
+
+          // Pocketed indicator
+          if (walkGuidanceState.isPocketed) {
+            ctx.fillStyle = 'rgba(30, 41, 59, 0.92)';
+            ctx.strokeStyle = '#94a3b8';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(displayW / 2 - 110, 56, 220, 22, 6);
+            ctx.fill();
+            ctx.stroke();
+            ctx.font = 'bold 9px system-ui, sans-serif';
+            ctx.fillStyle = '#cbd5e1';
+            ctx.textAlign = 'center';
+            ctx.fillText('📱 POCKET MODE (GPS & HAPTICS ONLY)', displayW / 2, 70);
+          }
+        }
+
         // 7. Top-Down 3D Circular Radar Mini-Map (College Presentation Star!)
         // Renders an authentic LiDAR circular sweep in top-right
         const radarR = 46;
@@ -431,10 +537,34 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
           ctx.fill();
         }
 
+        // Plot Walk Waypoint Vector on Radar
+        if (navigationMode === 'walk' && walkGuidanceState && walkGuidanceState.status === 'walking') {
+          const waypointAngleRad = -Math.PI / 2 + (walkGuidanceState.offRouteDeviationDeg * Math.PI) / 180;
+          const arrowLen = radarR - 8;
+          const aX = radarCX + Math.cos(waypointAngleRad) * arrowLen;
+          const aY = radarCY + Math.sin(waypointAngleRad) * arrowLen;
+
+          ctx.strokeStyle = '#06b6d4';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(radarCX, radarCY);
+          ctx.lineTo(aX, aY);
+          ctx.stroke();
+
+          ctx.fillStyle = '#06b6d4';
+          ctx.beginPath();
+          ctx.arc(aX, aY, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
         ctx.font = 'bold 8px monospace';
-        ctx.fillStyle = isRoad ? '#f87171' : '#34d399';
+        ctx.fillStyle = navigationMode === 'walk' ? '#38bdf8' : isRoad ? '#f87171' : '#34d399';
         ctx.textAlign = 'center';
-        ctx.fillText(isRoad ? 'ROAD RADAR' : 'HOME LIDAR', radarCX, radarCY + radarR + 11);
+        ctx.fillText(
+          navigationMode === 'walk' ? 'WALK RADAR' : isRoad ? 'ROAD RADAR' : 'HOME LIDAR',
+          radarCX,
+          radarCY + radarR + 11
+        );
       }
       animId = requestAnimationFrame(render);
     };
@@ -452,6 +582,10 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
     targetItem,
     userHeading,
     isRoad,
+    isRoadMode,
+    navigationMode,
+    walkGuidanceState,
+    isOffline,
     crosswalkDetected,
   ]);
 

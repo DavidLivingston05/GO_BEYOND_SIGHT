@@ -1,6 +1,7 @@
 // Real-time Local Vision, Direction Compass & Road Safety Engine (TFJS + COCO-SSD)
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import { speechManager } from './speechSynthesis';
 import type {
   ClockDirection,
   DetectedObject,
@@ -56,6 +57,9 @@ class ObjectDetectorService {
       } catch (fallbackErr) {
         console.error('Fatal error loading COCO-SSD:', fallbackErr);
         this.isLoading = false;
+        speechManager.speakUrgent(
+          'Vision model could not be loaded from cache. Compass heading, haptic guidance, and tap gestures are active.'
+        );
         return false;
       }
     }

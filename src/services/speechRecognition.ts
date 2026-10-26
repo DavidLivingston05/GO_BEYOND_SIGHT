@@ -1,5 +1,6 @@
 // Always-On Voice Wake-Word & Continuous Conversational Engine
 import { speechManager } from './speechSynthesis';
+import { offlineVoiceService } from './offline/OfflineVoice';
 
 export type VoiceCommandHandler = (
   commandType:
@@ -24,9 +25,30 @@ export type VoiceCommandHandler = (
     | 'which_direction_door'
     | 'which_direction_person'
     | 'check_compass'
+    | 'start_walk_mode'
+    | 'stop_walk_mode'
+    | 'confirm_yes'
+    | 'confirm_no'
+    | 'select_choice'
+    | 'emergency_help'
+    | 'set_emergency_contact'
+    | 'explain_vibrations'
+    | 'forget_data'
+    | 'simulate_walk'
+    | 'install_pwa'
+    | 'simulate_offline'
+    | 'simulate_online'
+    | 'simulate_flaky'
+    | 'where_am_i'
     | 'general_query',
   rawTranscript: string,
-  extra?: { targetObject?: string; personName?: string }
+  extra?: {
+    targetObject?: string;
+    personName?: string;
+    destination?: string;
+    choiceIndex?: number;
+    contactInput?: string;
+  }
 ) => void;
 
 interface IWindowSpeech extends Window {
@@ -42,6 +64,7 @@ class SpeechRecognitionService {
   private commandHandler: VoiceCommandHandler | null = null;
   private onTranscriptUpdate: ((transcript: string, isFinal: boolean) => void) | null = null;
   private onStatusChange: ((isListening: boolean) => void) | null = null;
+  private offlineSpeechWarningSpoken = false;
 
   constructor() {
     this.initRecognition();
@@ -64,6 +87,7 @@ class SpeechRecognitionService {
       this.recognition.interimResults = true;
       this.recognition.lang = 'en-US';
       this.recognition.maxAlternatives = 1;
+      offlineVoiceService.configureOfflineRecognition(this.recognition);
 
       this.recognition.onstart = () => {
         this.isListeningRef = true;
@@ -109,6 +133,9 @@ class SpeechRecognitionService {
 
       this.recognition.onerror = (event: any) => {
         const error = event.error;
+        if (error === 'network') {
+          this.handleOfflineNetworkSpeechError();
+        }
         // Benign errors: 'no-speech' happens when user pauses; 'aborted' happens when stopped
         if (error !== 'no-speech' && error !== 'aborted') {
           console.warn('Speech recognition status:', error);
@@ -137,6 +164,14 @@ class SpeechRecognitionService {
     this.restartTimeout = setTimeout(() => {
       this.start();
     }, delayMs);
+  }
+
+  private handleOfflineNetworkSpeechError(): void {
+    if (this.offlineSpeechWarningSpoken) return;
+    this.offlineSpeechWarningSpoken = true;
+    speechManager.speakUrgent(
+      'Speech recognition is unavailable offline on this browser. Voice commands are paused. Use 1 tap to check path, 2 taps to describe room, or 3 taps for screen curtain.'
+    );
   }
 
   public registerCommandHandler(handler: VoiceCommandHandler): void {
@@ -216,6 +251,169 @@ class SpeechRecognitionService {
       clean.includes('wake up')
     ) {
       this.commandHandler('wake', transcript);
+      return;
+    }
+
+    // 1b. Emergency & SOS Assistance ("Help me", "Emergency")
+    if (
+      clean.includes('help me') ||
+      clean.includes('emergency') ||
+      clean.includes('sos') ||
+      clean.includes('i need help') ||
+      clean.includes('call help')
+    ) {
+      this.commandHandler('emergency_help', transcript);
+      return;
+    }
+
+    // 1c. Set Emergency Contact ("Set emergency contact [number/name]")
+    if (
+      clean.includes('emergency contact') ||
+      clean.includes('trusted contact')
+    ) {
+      this.commandHandler('set_emergency_contact', transcript, { contactInput: transcript });
+      return;
+    }
+
+    // 1d. Haptic Help: "What do the vibrations mean?"
+    if (
+      clean.includes('what do the vibrations mean') ||
+      clean.includes('what does vibration mean') ||
+      clean.includes('explain vibrations') ||
+      clean.includes('vibration pattern') ||
+      clean.includes('haptic help')
+    ) {
+      this.commandHandler('explain_vibrations', transcript);
+      return;
+    }
+
+    // 1e. Privacy: "Forget my data"
+    if (
+      clean.includes('forget my data') ||
+      clean.includes('delete my data') ||
+      clean.includes('clear my data') ||
+      clean.includes('forget data') ||
+      clean.includes('reset my data')
+    ) {
+      this.commandHandler('forget_data', transcript);
+      return;
+    }
+
+    // 1f. Simulation / Test Harness: "Simulate walk", "Test walk mode"
+    if (
+      clean.includes('simulate walk') ||
+      clean.includes('simulation walk') ||
+      clean.includes('test walk mode') ||
+      clean.includes('simulate walking')
+    ) {
+      this.commandHandler('simulate_walk', transcript);
+      return;
+    }
+
+    // 1g. Walk Mode: Stop walking / End route
+    if (
+      clean.includes('stop walking') ||
+      clean.includes('stop walk') ||
+      clean.includes('end route') ||
+      clean.includes('stop navigation') ||
+      clean.includes('exit walk mode')
+    ) {
+      this.commandHandler('stop_walk_mode', transcript);
+      return;
+    }
+
+    // 1h. Destination Walk: "Take me to [place]", "Walk to [place]", "Navigate to [place]"
+    const walkToRegex = /(?:take\s+me\s+to|walk\s+to|navigate\s+to|directions\s+to|route\s+to)\s+([a-zA-Z0-9\s]+)/i;
+    const walkToMatch = clean.match(walkToRegex);
+    if (walkToMatch && walkToMatch[1]) {
+      const dest = walkToMatch[1].trim();
+      if (!dest.includes('door') && !dest.includes('exit') && !dest.includes('sleep')) {
+        this.commandHandler('start_walk_mode', transcript, { destination: dest });
+        return;
+      }
+    }
+
+    // 1i. Generic Walk Mode Activation: "Walk mode", "Start walking"
+    if (
+      clean === 'walk mode' ||
+      clean.includes('start walking') ||
+      clean.includes('walk mode') ||
+      clean.includes('walking mode') ||
+      clean.includes('start walk')
+    ) {
+      this.commandHandler('start_walk_mode', transcript);
+      return;
+    }
+
+    // 1j. Confirmation handlers (for "Say yes to confirm" or numbered choices)
+    if (clean === 'yes' || clean === 'confirm' || clean === 'start' || clean === 'yep' || clean === 'yeah') {
+      this.commandHandler('confirm_yes', transcript);
+      return;
+    }
+    if (clean === 'no' || clean === 'cancel' || clean === 'nope' || clean === 'abort') {
+      this.commandHandler('confirm_no', transcript);
+      return;
+    }
+    if (clean === '1' || clean === 'one' || clean === 'first' || clean === 'number 1') {
+      this.commandHandler('select_choice', transcript, { choiceIndex: 0 });
+      return;
+    }
+    if (clean === '2' || clean === 'two' || clean === 'second' || clean === 'number 2') {
+      this.commandHandler('select_choice', transcript, { choiceIndex: 1 });
+      return;
+    }
+    if (clean === '3' || clean === 'three' || clean === 'third' || clean === 'number 3') {
+      this.commandHandler('select_choice', transcript, { choiceIndex: 2 });
+      return;
+    }
+
+    // 1k. Install App / Add to Home Screen
+    if (
+      clean.includes('install app') ||
+      clean.includes('install beyond sight') ||
+      clean.includes('add to home screen') ||
+      clean.includes('home screen')
+    ) {
+      this.commandHandler('install_pwa', transcript);
+      return;
+    }
+
+    // 1l. Offline / Online Network Simulations
+    if (
+      clean.includes('simulate offline') ||
+      clean.includes('go offline') ||
+      clean.includes('test offline')
+    ) {
+      this.commandHandler('simulate_offline', transcript);
+      return;
+    }
+
+    if (
+      clean.includes('simulate online') ||
+      clean.includes('go online') ||
+      clean.includes('test online')
+    ) {
+      this.commandHandler('simulate_online', transcript);
+      return;
+    }
+
+    if (
+      clean.includes('simulate flaky') ||
+      clean.includes('test flaky')
+    ) {
+      this.commandHandler('simulate_flaky', transcript);
+      return;
+    }
+
+    // 1m. Where am I? (Offline GPS & Location History)
+    if (
+      clean === 'where am i' ||
+      clean.includes('where am i located') ||
+      clean.includes('whats my location') ||
+      clean.includes('tell me where i am') ||
+      clean.includes('what is my current location')
+    ) {
+      this.commandHandler('where_am_i', transcript);
       return;
     }
 
@@ -509,7 +707,7 @@ class SpeechRecognitionService {
     }
 
     // 8b. General object query: "Where is the [item]?"
-    const whereIsRegex = /(?:where\s+is\s+(?:the\s+)?|where\s+are\s+(?:the\s+)?|find\s+(?:the\s+)?|look\s+for\s+(?:the\s+)?|navigate\s+to\s+(?:the\s+)?|take\s+me\s+to\s+(?:the\s+)?)([a-zA-Z\s]+)/i;
+    const whereIsRegex = /(?:where\s+is\s+(?:the\s+)?|where\s+are\s+(?:the\s+)?|find\s+(?:the\s+)?|look\s+for\s+(?:the\s+)?)([a-zA-Z\s]+)/i;
     const whereMatch = clean.match(whereIsRegex);
     if (whereMatch && whereMatch[1]) {
       const target = whereMatch[1].trim();

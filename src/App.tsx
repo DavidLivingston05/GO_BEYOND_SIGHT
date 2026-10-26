@@ -5,7 +5,27 @@ import { speechRecognitionService } from './services/speechRecognition';
 import { objectDetectorService, degreesToCardinal } from './services/objectDetector';
 import { personMemoryService } from './services/personMemory';
 import { geminiVisionService } from './services/geminiVision';
-import type { AssistantState, DetectedObject, VisionSettings, DoorGuidanceInfo, NavigationMode } from './types';
+import type {
+  AssistantState,
+  DetectedObject,
+  VisionSettings,
+  DoorGuidanceInfo,
+  NavigationMode,
+  WalkGuidanceState,
+  LatLng,
+} from './types';
+import { guidanceEngine } from './services/walk/GuidanceEngine';
+import { obstacleMonitor } from './services/walk/ObstacleMonitor';
+import { pocketDetector } from './services/walk/PocketDetector';
+import { emergencyService } from './services/walk/Emergency';
+import { hapticService } from './services/walk/HapticPatterns';
+import { simulationHarness } from './services/walk/SimulationHarness';
+import { i18n } from './services/i18n';
+import { offlineModeController } from './services/offline/OfflineModeController';
+import { cacheManager } from './services/offline/CacheManager';
+import { locationHistoryService } from './services/offline/LocationHistory';
+import { offlineTestHarness } from './services/offline/OfflineTestHarness';
+import { featureGate } from './services/offline/FeatureGate';
 
 import { GiantTouchTarget } from './components/GiantTouchTarget';
 import { CameraRadarCanvas } from './components/CameraRadarCanvas';
@@ -33,10 +53,17 @@ export function App() {
   // Compass Heading & Direction Orientation
   const [userHeading, setUserHeading] = useState(0); // 0 - 360 degrees
 
-  // Environment Navigation Mode: Standard Home Mode (Default) vs Road Mode
+  // Environment Navigation Mode: Standard Home Mode vs Road Mode vs Smart Walk Mode
   const [navigationMode, setNavigationMode] = useState<NavigationMode>('home');
-  const isRoadMode = navigationMode === 'road';
+  const isRoadMode = navigationMode === 'road' || navigationMode === 'walk';
   const [crosswalkDetected, setCrosswalkDetected] = useState(false);
+
+  // Smart Walk Mode Guidance State & GPS
+  const [walkGuidanceState, setWalkGuidanceState] = useState<WalkGuidanceState>(() => guidanceEngine.getState());
+  const [simulatedDetections, setSimulatedDetections] = useState<DetectedObject[]>([]);
+  const userLocationRef = useRef<LatLng | null>(null);
+  const lowBatteryWarned = useRef(false);
+  const [isOffline, setIsOffline] = useState(false);
 
   // Daily Mobility Features
   const [activeTargetItem, setActiveTargetItem] = useState<string | null>(null);
@@ -81,7 +108,9 @@ export function App() {
       } else if (e.alpha !== null) {
         heading = (360 - e.alpha) % 360;
       }
-      setUserHeading(Math.round(heading));
+      const rounded = Math.round(heading);
+      setUserHeading(rounded);
+      guidanceEngine.updateHeading(rounded);
     };
 
     if (typeof window !== 'undefined' && 'DeviceOrientationEvent' in window) {
@@ -91,6 +120,81 @@ export function App() {
     return () => {
       window.removeEventListener('deviceorientation', handleOrientation, true);
     };
+  }, []);
+
+  // 1b. Smart Walk Guidance Engine Subscription
+  useEffect(() => {
+    const unsubscribe = guidanceEngine.subscribe((next) => {
+      setWalkGuidanceState(next);
+    });
+    return unsubscribe;
+  }, []);
+
+  // 1c. Geolocation WatchPosition (High Accuracy)
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
+
+    const successHandler = (pos: GeolocationPosition) => {
+      const loc: LatLng = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      };
+      userLocationRef.current = loc;
+      guidanceEngine.updateLocation(loc, pos.coords.accuracy);
+    };
+
+    const errorHandler = (err: GeolocationPositionError) => {
+      console.warn('Geolocation error:', err.message);
+      if (err.code === err.PERMISSION_DENIED && navigationMode === 'walk') {
+        speechManager.speakUrgent(i18n.t.locationDenied);
+      }
+    };
+
+    const watchId = navigator.geolocation.watchPosition(successHandler, errorHandler, {
+      enableHighAccuracy: true,
+      maximumAge: 2000,
+      timeout: 10000,
+    });
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [navigationMode]);
+
+  // 1d. Low Battery Status Monitor (< 15% alert)
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'getBattery' in navigator) {
+      (navigator as any)
+        .getBattery()
+        .then((battery: any) => {
+          const checkBattery = () => {
+            if (battery.level <= 0.15 && !battery.charging && !lowBatteryWarned.current) {
+              lowBatteryWarned.current = true;
+              speechManager.speakUrgent(i18n.t.lowBatteryWarning);
+            }
+          };
+          checkBattery();
+          battery.addEventListener('levelchange', checkBattery);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  // 1e. Walk Simulation Harness Callback
+  useEffect(() => {
+    simulationHarness.setDetectionsCallback((sim) => {
+      setSimulatedDetections(sim);
+    });
+    return () => simulationHarness.setDetectionsCallback(() => {});
+  }, []);
+
+  // 1f. Automatic Offline Mode Subscription & Background Precache
+  useEffect(() => {
+    const unsubscribe = offlineModeController.subscribe((offline) => {
+      setIsOffline(offline);
+    });
+    cacheManager.precacheOfflineAssets();
+    return unsubscribe;
   }, []);
 
   // 2. Initialize local TensorFlow.js COCO-SSD model
@@ -286,8 +390,6 @@ export function App() {
     });
   }, []);
 
-  const toggleRoadMode = toggleNavigationMode;
-
   // Compass Heading Check
   const handleCheckCompass = useCallback(() => {
     audioEngine.playGestureFeedback('tap');
@@ -299,6 +401,16 @@ export function App() {
   const handleCheckPathAhead = useCallback(() => {
     speechManager.cancelAll();
     audioEngine.playGestureFeedback('tap');
+
+    // In active Walk Mode: Tap announces turn progress & path
+    if (navigationMode === 'walk' && walkGuidanceState.status === 'walking') {
+      const street = walkGuidanceState.nextStreetName ? ` onto ${walkGuidanceState.nextStreetName}` : '';
+      const turn = walkGuidanceState.nextManeuverModifier || 'straight';
+      speechManager.speakReply(
+        `In ${walkGuidanceState.stepsToNextTurn} steps, ${turn}${street}. You are heading ${userHeading} degrees.`
+      );
+      return;
+    }
 
     const centerObstacles = detections.filter(
       (d) =>
@@ -320,15 +432,139 @@ export function App() {
     speechManager.speakReply(
       `${name} ahead at 12 o'clock${cardinal}, ${closest.estimatedMeters} meters away (${closest.estimatedSteps} steps). Step slightly to your side.`
     );
-  }, [detections, cameraFacing]);
+  }, [detections, cameraFacing, navigationMode, walkGuidanceState, userHeading]);
+
+  const handleOpenEnrollModal = useCallback(() => {
+    const video = videoRef.current;
+    if (video && isCameraActive) {
+      const person = detections.find((d) => d.class === 'person');
+      const bbox = person
+        ? person.bbox
+        : ([video.videoWidth * 0.25, video.videoHeight * 0.2, video.videoWidth * 0.5, video.videoHeight * 0.6] as [
+            number,
+            number,
+            number,
+            number
+          ]);
+      const sig = personMemoryService.extractVisualSignature(video, bbox);
+      if (sig) {
+        setEnrollThumbnail(sig.thumbnail);
+      }
+    }
+    setIsEnrollModalOpen(true);
+  }, [detections, isCameraActive]);
 
   // 5. Voice Commands Handler
   const handleVoiceCommand = useCallback(
     async (
       commandType: string,
       transcript: string,
-      extra?: { targetObject?: string; personName?: string }
+      extra?: {
+        targetObject?: string;
+        personName?: string;
+        destination?: string;
+        choiceIndex?: number;
+        contactInput?: string;
+      }
     ) => {
+      // 0. Smart Walk Mode commands
+      if (commandType === 'start_walk_mode') {
+        setNavigationMode('walk');
+        setActiveTargetItem(null);
+        audioEngine.playActivationChime();
+        if (!isCameraActive) {
+          await startCamera();
+        }
+        await guidanceEngine.startWalkMode(extra?.destination, userLocationRef.current || undefined);
+        return;
+      }
+
+      if (commandType === 'stop_walk_mode') {
+        guidanceEngine.stopRoute();
+        obstacleMonitor.reset();
+        setNavigationMode('home');
+        return;
+      }
+
+      if (commandType === 'confirm_yes') {
+        if (guidanceEngine.getState().status === 'confirming_destination') {
+          setNavigationMode('walk');
+          await guidanceEngine.confirmDestination(0);
+        } else {
+          speechManager.speakReply('Confirmed.');
+        }
+        return;
+      }
+
+      if (commandType === 'confirm_no') {
+        if (guidanceEngine.getState().status === 'confirming_destination') {
+          guidanceEngine.cancelDestination();
+          setNavigationMode('home');
+        } else {
+          speechManager.speakReply('Cancelled.');
+        }
+        return;
+      }
+
+      if (commandType === 'select_choice') {
+        if (guidanceEngine.getState().status === 'confirming_destination') {
+          setNavigationMode('walk');
+          await guidanceEngine.confirmDestination(extra?.choiceIndex ?? 0);
+        }
+        return;
+      }
+
+      if (commandType === 'emergency_help') {
+        await emergencyService.triggerEmergency(userLocationRef.current);
+        return;
+      }
+
+      if (commandType === 'set_emergency_contact') {
+        emergencyService.parseAndSaveContact(extra?.contactInput || transcript);
+        return;
+      }
+
+      if (commandType === 'explain_vibrations') {
+        await hapticService.explainPatterns((text) => speechManager.speakReply(text));
+        return;
+      }
+
+      if (commandType === 'forget_data') {
+        emergencyService.forgetAllData();
+        return;
+      }
+
+      if (commandType === 'simulate_walk') {
+        setNavigationMode('walk');
+        await simulationHarness.start();
+        return;
+      }
+
+      if (commandType === 'install_pwa') {
+        await cacheManager.promptInstall();
+        return;
+      }
+
+      if (commandType === 'simulate_offline') {
+        offlineTestHarness.simulateOffline();
+        return;
+      }
+
+      if (commandType === 'simulate_online') {
+        offlineTestHarness.simulateOnline();
+        return;
+      }
+
+      if (commandType === 'simulate_flaky') {
+        offlineTestHarness.simulateFlaky();
+        return;
+      }
+
+      if (commandType === 'where_am_i') {
+        const desc = locationHistoryService.getOfflineLocationDescription(userLocationRef.current, userHeading);
+        speechManager.speakReply(desc);
+        return;
+      }
       // 1. Wake word
       if (commandType === 'wake') {
         audioEngine.playActivationChime();
@@ -600,8 +836,8 @@ export function App() {
         audioEngine.playThinkingChime();
         setStatusMessage('Scanning room & surroundings...');
 
-        // 1. If Gemini Vision key is present, perform deep multimodal spatial room narration
-        if (geminiVisionService.hasApiKey() && videoRef.current) {
+        // 1. If online and Gemini Vision key is present, perform deep multimodal spatial room narration
+        if (featureGate.evaluate('describe_room') === 'cloud' && geminiVisionService.hasApiKey() && videoRef.current) {
           const base64 = geminiVisionService.captureFrameBase64(videoRef.current);
           if (base64) {
             try {
@@ -614,7 +850,7 @@ export function App() {
           }
         }
 
-        // 2. Local Intelligent Spatial Room & Surroundings Narration
+        // 2. Local Intelligent Spatial Room & Surroundings Narration (100% Offline Capable)
         const cardinal = degreesToCardinal(userHeading);
         const validItems = detections.filter(
           (d) => !d.isSelfUser && (cameraFacing !== 'user' || d.class !== 'person')
@@ -640,8 +876,9 @@ export function App() {
         const doors = doorGuidance && doorGuidance.confidence > 0.35 ? [doorGuidance] : [];
         const people = validItems.filter((d) => d.class === 'person');
 
+        const offlinePrefix = isOffline ? 'Basic description, offline. ' : '';
         const narrationParts: string[] = [
-          `You are facing ${cardinal} (${userHeading}°).`,
+          `${offlinePrefix}You are facing ${cardinal} (${userHeading}°).`,
           pathText,
         ];
 
@@ -678,6 +915,10 @@ export function App() {
         speechManager.cancelAll();
         setAssistantState('thinking');
         audioEngine.playThinkingChime();
+
+        if (featureGate.handleCloudUnavailable('read_text', 'Reading text', { action: 'read_text' })) {
+          return;
+        }
 
         if (geminiVisionService.hasApiKey() && videoRef.current) {
           const base64 = geminiVisionService.captureFrameBase64(videoRef.current);
@@ -764,6 +1005,14 @@ export function App() {
 
       // 9. General conversational query
       if (transcript) {
+        const clean = transcript.toLowerCase().trim();
+        if (clean.includes("what's new") || clean.includes("what is new") || clean.includes("whats new")) {
+          speechManager.speakReply(
+            "Beyond Sight now features Automatic Offline Mode with PWA caching and on-device fallback. When your connection drops, path clearance, room description, and vehicle alerts continue uninterrupted without internet."
+          );
+          return;
+        }
+
         if (geminiVisionService.hasApiKey() && videoRef.current) {
           setAssistantState('thinking');
           audioEngine.playThinkingChime();
@@ -790,9 +1039,14 @@ export function App() {
       stopCamera,
       toggleTorch,
       toggleCurtain,
-      toggleRoadMode,
+      toggleNavigationMode,
+      toggleCameraFacing,
+      cameraFacing,
+      userHeading,
       handleCheckPathAhead,
       handleCheckCompass,
+      handleOpenEnrollModal,
+      isOffline,
     ]
   );
 
@@ -865,9 +1119,19 @@ export function App() {
 
           const now = Date.now();
 
-          // 1. Road Safety Sentinel: Approaching Vehicles, Traffic Lights, Crosswalks (Road Mode Only)
+          // 0. Pocket & Lens Occlusion Detector
+          const isPocketed = pocketDetector.analyzeFrame(video);
+          guidanceEngine.setPocketed(isPocketed);
+
+          // 0b. Smart Walk Mode Obstacle Awareness (Walking Corridor & Escalating Cues)
+          if (navigationMode === 'walk') {
+            const corridorObstacles = obstacleMonitor.evaluateCorridor(detected, width, height);
+            obstacleMonitor.processEscalatingCues(corridorObstacles, isPocketed);
+          }
+
+          // 1. Road Safety Sentinel: Approaching Vehicles, Traffic Lights, Crosswalks (Road & Walk Modes)
           let fastVehicle: DetectedObject | undefined = undefined;
-          if (navigationMode === 'road') {
+          if (navigationMode === 'road' || navigationMode === 'walk') {
             fastVehicle = detected.find((d) => d.isVehicle && d.isApproachingFast);
             if (fastVehicle && now - lastVehicleAlertTime.current > 3200) {
               lastVehicleAlertTime.current = now;
@@ -961,7 +1225,14 @@ export function App() {
       }
 
       if (isRunning) {
-        const frameInterval = isCurtainActive ? 220 : isEcoMode ? 160 : 100;
+        const isDocHidden = typeof document !== 'undefined' && document.hidden;
+        const frameInterval = isDocHidden
+          ? 600
+          : isCurtainActive || walkGuidanceState.isPocketed
+          ? 240
+          : isEcoMode
+          ? 140
+          : 80;
         detectionLoopRef.current = window.setTimeout(detectFrame, frameInterval);
       }
     };
@@ -985,6 +1256,7 @@ export function App() {
     userHeading,
     navigationMode,
     cameraFacing,
+    walkGuidanceState.isPocketed,
   ]);
 
   // Initial Accessibility Unlock
@@ -1011,19 +1283,6 @@ export function App() {
   const handlePushToTalkEnd = () => {
     setAssistantState('thinking');
     setStatusMessage('Analyzing...');
-  };
-
-  const handleOpenEnrollModal = () => {
-    const video = videoRef.current;
-    if (video && isCameraActive) {
-      const person = detections.find((d) => d.class === 'person');
-      const bbox = person ? person.bbox : [video.videoWidth * 0.25, video.videoHeight * 0.2, video.videoWidth * 0.5, video.videoHeight * 0.6] as [number, number, number, number];
-      const sig = personMemoryService.extractVisualSignature(video, bbox);
-      if (sig) {
-        setEnrollThumbnail(sig.thumbnail);
-      }
-    }
-    setIsEnrollModalOpen(true);
   };
 
   const handleEnrollPerson = (name: string) => {
@@ -1053,7 +1312,7 @@ export function App() {
       <main className="absolute inset-0 w-full h-full overflow-hidden bg-black">
         <CameraRadarCanvas
           videoRef={videoRef}
-          detections={detections}
+          detections={simulatedDetections.length > 0 ? simulatedDetections : detections}
           isCameraActive={isCameraActive}
           onToggleCamera={toggleCamera}
           doorGuidance={doorGuidance}
@@ -1064,6 +1323,8 @@ export function App() {
           navigationMode={navigationMode}
           isRoadMode={isRoadMode}
           crosswalkDetected={crosswalkDetected}
+          walkGuidanceState={walkGuidanceState}
+          isOffline={isOffline}
           onSingleTap={handleCheckPathAhead}
           onDoubleTap={() => handleVoiceCommand('describe_room', 'describe the room')}
           onLongPressStart={handlePushToTalk}

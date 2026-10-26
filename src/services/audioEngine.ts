@@ -119,6 +119,71 @@ class AudioEngine {
   }
 
   /**
+   * Distinct descending offline disconnect earcon
+   */
+  public playOfflineDisconnectEarcon(): void {
+    try {
+      const ctx = this.getAudioContext();
+      const now = ctx.currentTime;
+
+      // Descending two-tone: C5 (523.25Hz) -> G4 (392Hz) -> C4 (261.63Hz)
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.setValueAtTime(392.0, now + 0.12);
+      osc.frequency.exponentialRampToValueAtTime(261.63, now + 0.28);
+
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.35, now + 0.02);
+      gain.gain.setValueAtTime(0.3, now + 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain || ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.38);
+    } catch {
+      // Audio fallback
+    }
+  }
+
+  /**
+   * Ascending harmonic online reconnect earcon
+   */
+  public playOnlineReconnectEarcon(): void {
+    try {
+      const ctx = this.getAudioContext();
+      const now = ctx.currentTime;
+
+      // Ascending three-tone: G4 (392Hz) -> C5 (523.25Hz) -> G5 (783.99Hz)
+      [
+        { freq: 392.0, time: 0 },
+        { freq: 523.25, time: 0.1 },
+        { freq: 783.99, time: 0.2 },
+      ].forEach((note) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(note.freq, now + note.time);
+
+        gain.gain.setValueAtTime(0, now + note.time);
+        gain.gain.linearRampToValueAtTime(0.32, now + note.time + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + note.time + 0.25);
+
+        osc.connect(gain);
+        gain.connect(this.masterGain || ctx.destination);
+
+        osc.start(now + note.time);
+        osc.stop(now + note.time + 0.28);
+      });
+    } catch {
+      // Audio fallback
+    }
+  }
+
+  /**
    * Soft thinking pulse chime
    */
   public playThinkingChime(): void {
@@ -213,6 +278,85 @@ class AudioEngine {
       osc.stop(now + duration + 0.02);
     } catch {
       // Ignore audio context interruption
+    }
+  }
+
+  /**
+   * Binaural steering cue for heading drift:
+   * Plays a soft gentle tone panned to the side the user needs to turn towards.
+   */
+  public playBinauralSteeringCue(side: 'left' | 'right'): void {
+    try {
+      const ctx = this.getAudioContext();
+      const now = ctx.currentTime;
+      const panValue = side === 'left' ? -0.85 : 0.85;
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(660, now);
+      osc.frequency.exponentialRampToValueAtTime(side === 'left' ? 740 : 880, now + 0.15);
+
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.28, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+      if (typeof ctx.createStereoPanner === 'function') {
+        const panner = ctx.createStereoPanner();
+        panner.pan.setValueAtTime(panValue, now);
+        osc.connect(gain);
+        gain.connect(panner);
+        panner.connect(this.masterGain || ctx.destination);
+      } else {
+        osc.connect(gain);
+        gain.connect(this.masterGain || ctx.destination);
+      }
+
+      osc.start(now);
+      osc.stop(now + 0.25);
+    } catch {
+      // Audio fallback
+    }
+  }
+
+  /**
+   * Escalating obstacle audio cues in walking corridor
+   * Level 1: soft ping
+   * Level 2: faster, higher ping with stereo panning to obstacle side
+   */
+  public playObstacleEscalatingPing(panValue: number, urgencyLevel: 1 | 2): void {
+    try {
+      const ctx = this.getAudioContext();
+      const now = ctx.currentTime;
+
+      const freq = urgencyLevel === 1 ? 750 : 1250;
+      const duration = urgencyLevel === 1 ? 0.06 : 0.09;
+      const volume = urgencyLevel === 1 ? 0.22 : 0.42;
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(volume, now + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+      if (typeof ctx.createStereoPanner === 'function') {
+        const panner = ctx.createStereoPanner();
+        panner.pan.setValueAtTime(Math.max(-1, Math.min(1, panValue)), now);
+        osc.connect(gain);
+        gain.connect(panner);
+        panner.connect(this.masterGain || ctx.destination);
+      } else {
+        osc.connect(gain);
+        gain.connect(this.masterGain || ctx.destination);
+      }
+
+      osc.start(now);
+      osc.stop(now + duration + 0.02);
+    } catch {
+      // Audio fallback
     }
   }
 
