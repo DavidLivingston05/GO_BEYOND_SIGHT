@@ -721,7 +721,11 @@ export function App() {
         );
 
         if (match) {
-          audioEngine.playTargetSeekerPing(match.estimatedMeters / 4, true);
+          const centerX = match.bbox[0] + match.bbox[2] / 2;
+          const videoW = videoRef.current?.videoWidth || 640;
+          const panValue = Math.max(-1, Math.min(1, (centerX - videoW / 2) / (videoW / 2)));
+          const isCentered = match.clockDirection === "12 o'clock" || match.zone === 'center';
+          audioEngine.playTargetSeekerPing(match.estimatedMeters / 4, isCentered, panValue);
 
           let turnGuidance = '';
           if (match.clockDirection === "12 o'clock" || match.zone === 'center') {
@@ -913,8 +917,13 @@ export function App() {
 
             if (targetObj) {
               const isCentered = targetObj.zone === 'center' || targetObj.clockDirection === "12 o'clock";
+              const centerX = targetObj.bbox[0] + targetObj.bbox[2] / 2;
+              const videoW = videoRef.current?.videoWidth || 640;
+              const panValue = Math.max(-1, Math.min(1, (centerX - videoW / 2) / (videoW / 2)));
+
               if (isCentered) {
                 // User has turned and is directly facing the target!
+                audioEngine.playTargetSeekerPing(targetObj.estimatedMeters / 4, true, 0);
                 audioEngine.playSuccessTone();
                 speechManager.speakReply(
                   `You are facing the ${activeTargetItem} directly ahead, ${targetObj.estimatedSteps} steps away.`
@@ -922,7 +931,7 @@ export function App() {
                 setActiveTargetItem(null); // Objective reached!
               } else if (now - lastTargetPingTime.current > 1400) {
                 lastTargetPingTime.current = now;
-                audioEngine.playTargetSeekerPing(targetObj.estimatedMeters / 4, false);
+                audioEngine.playTargetSeekerPing(targetObj.estimatedMeters / 4, false, panValue);
               }
             }
           }

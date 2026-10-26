@@ -50,7 +50,8 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
 
   // Gesture handling state
   const touchTimerRef = useRef<number | null>(null);
-  const lastTapTimeRef = useRef<number>(0);
+  const tapCountRef = useRef<number>(0);
+  const tapTimeoutRef = useRef<number | null>(null);
   const isLongPressActiveRef = useRef<boolean>(false);
   const [gestureFeedbackText, setGestureFeedbackText] = useState<string | null>(null);
 
@@ -486,29 +487,34 @@ export const CameraRadarCanvas: React.FC<CameraRadarCanvasProps> = ({
       return;
     }
 
-    const now = Date.now();
-    const timeSinceLastTap = now - lastTapTimeRef.current;
-
-    if (timeSinceLastTap < 350) {
-      // Double Tap! Triggers "Describe the room"
-      lastTapTimeRef.current = 0;
-      if (onDoubleTap) {
-        onDoubleTap();
-        triggerVisualFeedback('Scanning & Describing Room...');
-      }
-    } else {
-      // Single Tap! Checks path & listens
-      lastTapTimeRef.current = now;
-      window.setTimeout(() => {
-        if (Date.now() - lastTapTimeRef.current >= 330 && lastTapTimeRef.current !== 0) {
-          if (onSingleTap) {
-            onSingleTap();
-            triggerVisualFeedback('Path Check');
-          }
-          lastTapTimeRef.current = 0;
-        }
-      }, 340);
+    // Accumulate taps within 320ms window: 1 tap (path check), 2 taps (describe room), 3 taps (curtain)
+    tapCountRef.current += 1;
+    if (tapTimeoutRef.current) {
+      clearTimeout(tapTimeoutRef.current);
     }
+
+    tapTimeoutRef.current = window.setTimeout(() => {
+      const taps = tapCountRef.current;
+      tapCountRef.current = 0;
+      tapTimeoutRef.current = null;
+
+      if (taps === 1) {
+        if (onSingleTap) {
+          onSingleTap();
+          triggerVisualFeedback('Path Check');
+        }
+      } else if (taps === 2) {
+        if (onDoubleTap) {
+          onDoubleTap();
+          triggerVisualFeedback('Scanning & Describing Room...');
+        }
+      } else if (taps >= 3) {
+        if (onToggleCurtain) {
+          onToggleCurtain();
+          triggerVisualFeedback('Screen Curtain Toggled');
+        }
+      }
+    }, 320);
   };
 
   return (

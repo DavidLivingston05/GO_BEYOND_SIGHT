@@ -315,18 +315,28 @@ class AudioEngine {
   }
 
   /**
-   * Target-Seeker "Metal Detector" Sonar Ping
-   * Beeps faster and with higher pitch when aiming directly at a sought daily item (bottle, keys, chair, door).
+   * Binaural Target-Seeker "Acoustic Homing" Sonar Ping
+   * Panned left/right into user's ears/headphones based on object position.
+   * Pitch rises as user gets closer; centers and plays pleasant bell tone with haptic vibration when aimed straight ahead.
    */
-  public playTargetSeekerPing(distanceRatio: number, isCentered: boolean): void {
+  public playTargetSeekerPing(distanceRatio: number, isCentered: boolean, panValue = 0): void {
     try {
+      // Haptic tactile pulse when locked directly onto target
+      if (isCentered && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try {
+          navigator.vibrate([35, 45, 40]);
+        } catch {
+          // Vibration ignore
+        }
+      }
+
       const ctx = this.getAudioContext();
       const now = ctx.currentTime;
 
-      // Pitch ranges from 600Hz (far/off-axis) up to 1600Hz (centered/close)
-      const baseFreq = 700 + (1 - Math.min(1, Math.max(0, distanceRatio))) * 600 + (isCentered ? 300 : 0);
-      const vol = isCentered ? 0.35 : 0.2;
-      const duration = isCentered ? 0.08 : 0.05;
+      // Pitch ranges from 600Hz (far) up to 1350Hz (close); centered adds warm harmonic
+      const baseFreq = 620 + (1 - Math.min(1, Math.max(0, distanceRatio))) * 600 + (isCentered ? 280 : 0);
+      const vol = isCentered ? 0.32 : 0.2;
+      const duration = isCentered ? 0.12 : 0.06;
 
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -337,11 +347,21 @@ class AudioEngine {
       gain.gain.linearRampToValueAtTime(vol, now + 0.008);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-      osc.connect(gain);
-      gain.connect(this.masterGain || ctx.destination);
+      // Stereo panning node for true binaural homing into headphones
+      const clampedPan = Math.max(-1, Math.min(1, panValue));
+      if (typeof ctx.createStereoPanner === 'function') {
+        const panner = ctx.createStereoPanner();
+        panner.pan.setValueAtTime(clampedPan, now);
+        osc.connect(gain);
+        gain.connect(panner);
+        panner.connect(this.masterGain || ctx.destination);
+      } else {
+        osc.connect(gain);
+        gain.connect(this.masterGain || ctx.destination);
+      }
 
       osc.start(now);
-      osc.stop(now + duration + 0.01);
+      osc.stop(now + duration + 0.02);
     } catch {
       // Fallback
     }
